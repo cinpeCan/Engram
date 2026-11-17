@@ -1,0 +1,53 @@
+# IDE & Editor
+.idea/
+*.iml
+.vscode/
+
+# Android & Gradle Build
+.gradle/
+**/build/
+/local.properties
+local.properties
+/captures/
+*.apk
+*.aab
+*.ap_
+*.dex
+output-metadata.json
+
+# Signing Keys
+*.jks
+*.keystore
+
+# Native / NDK / CMake
+.cxx/
+.externalNativeBuild/
+**/CMakeFiles/
+**/CMakeCache.txt
+**/cmake_install.cmake
+compile_commands.json
+third_party/
+
+# On-Device Model Weights & Caches
+*.mnn
+*.gguf
+*.onnx
+*.safetensors
+*.tflite
+/models/
+
+# Python Server Environment
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+.env
+
+# OS & Logs
+.DS_Store
+Thumbs.db
+*.log

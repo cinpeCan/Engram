@@ -1,0 +1,22 @@
+---
+description: Rules for Android UI, Navigation 3, MVI state management, and Deponder 0.5.0 integration
+globs: app/**/*.kt
+alwaysApply: false
+---
+
+# Android MVI, Compose & Navigation 3 Rules
+
+1. **Unidirectional Data Flow (MVI)**:
+   - Expose screen state via an immutable `@Immutable` data class wrapped in `StateFlow`.
+   - Use `SharedFlow` or one-shot events strictly for transient effects (snackbars, system intent launches); never hold dialog visibility as an unreset transient event.
+   - Keep `ViewModel` constructors pure Kotlin without `android.content.Context` references whenever possible.
+2. **Navigation 3 (`androidx.navigation3`)**:
+   - Maintain a user-owned `SnapshotStateList<EngramNavKey>` back stack.
+   - Support adaptive single-pane / two-pane rendering cleanly on compact and expanded window sizes.
+3. **Deponder 0.5.0 Integration (`com.cinpe.deponder.*`)**:
+   - Wrap each `DeponderDefaultRubber` in `key(edgeKey)` and each node in `key(node.id)` inside `Box(Modifier.deponderRoot(state))`.
+   - Enforce deduplicated node IDs, zero self-loops, and single merged edge per unordered pair `(a, b)`.
+   - Never mutate layout constraints inside `deponderRoot` frame loops.
+4. **Storage Boundaries**:
+   - Persist memories, FTS4 tokens, float vectors, and relation triples exclusively in `EngramSqliteStore`.
+   - Use `DataStore<Preferences>` solely for lightweight configuration switches (inference mode, selected model ID, server base URL).

@@ -1,0 +1,15 @@
+---
+description: Contract-First synchronization rules across contracts/, server/, and Android DTOs
+globs: contracts/**/*.json, server/**/*.py, app/**/remote/**/*.kt
+alwaysApply: false
+---
+
+# Contract-First Cross-Stack Rules
+
+1. **Schema as Single Source of Truth**:
+   - Before adding, renaming, or removing fields in API responses, SSE frames, or structured LLM extraction JSON, update the corresponding file under `contracts/*.schema.json` first.
+2. **Cross-Stack Verification**:
+   - Server Pydantic models in `server/app/schemas.py` MUST validate against `contracts/*.schema.json` via `server/tests/test_contracts.py`.
+   - Android `@Serializable` DTOs in `app/src/main/java/io/github/cinpecan/engram/data/remote/` MUST stay 1:1 field-compatible with `contracts/*.schema.json`.
+3. **Resilient Edge Structured Parsing**:
+   - Local quantized LLMs can emit markdown fences or minor syntax deviations around JSON; always strip fences and provide deterministic fallback extraction so UI workflows never crash on malformed model tokens.

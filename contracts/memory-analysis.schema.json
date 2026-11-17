@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/cinpeCan/Engram/contracts/memory-analysis.schema.json",
+  "title": "MemoryAnalysisPayload",
+  "description": "Structured White-Box Memory extraction output: summary, tags, human-in-the-loop calendar proposal, and 2D directed graph triples.",
+  "type": "object",
+  "required": ["summary", "tags", "calendarProposal", "relations"],
+  "additionalProperties": false,
+  "properties": {
+    "summary": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "tags": {
+      "type": "array",
+      "maxItems": 4,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 24
+      }
+    },
+    "calendarProposal": {
+      "type": ["object", "null"],
+      "required": ["title", "startTimeIso", "durationMinutes"],
+      "additionalProperties": false,
+      "properties": {
+        "title": { "type": "string", "minLength": 1 },
+        "startTimeIso": { "type": "string", "minLength": 10 },
+        "durationMinutes": { "type": "integer", "minimum": 5, "maximum": 480 },
+        "location": { "type": ["string", "null"] }
+      }
+    },
+    "relations": {
+      "type": "array",
+      "maxItems": 15,
+      "items": {
+        "type": "object",
+        "required": ["source", "target", "relation", "bidirectional"],
+        "additionalProperties": false,
+        "properties": {
+          "source": { "type": "string", "minLength": 1, "maxLength": 32 },
+          "target": { "type": "string", "minLength": 1, "maxLength": 32 },
+          "relation": { "type": "string", "minLength": 1, "maxLength": 24 },
+          "bidirectional": { "type": "boolean" }
+        }
+      }
+    }
+  }
+}
