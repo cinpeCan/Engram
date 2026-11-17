@@ -1,81 +1,96 @@
 package io.github.cinpecan.engram.ui.viewmodel
 
-import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
-import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import io.github.cinpecan.engram.data.repository.MemoryRepository
+import io.github.cinpecan.engram.domain.model.CalendarProposal
 import io.github.cinpecan.engram.domain.model.MemoryItem
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
-@Immutable
-data class CaptureUiState(
-    val memories: List<MemoryItem> = emptyList(),
-    val inputText: String = "",
-    val isSubmitting: Boolean = false,
-)
+sealed interface CaptureIntent {
+    data class UpdateInput(val text: String) : CaptureIntent
+    data class FillSample(val sample: String) : CaptureIntent
+    data object SubmitCapture : CaptureIntent
+    data class RequestAddCalendar(val memoryId: String, val proposal: CalendarProposal) : CaptureIntent
+    data class ConfirmCalendarLaunchResult(
+        val memoryId: String,
+        val title: String,
+        val launched: Boolean,
+    ) : CaptureIntent
+}
+
+sealed interface CaptureEffect {
+    data class LaunchCalendarInsert(val memoryId: String, val proposal: CalendarProposal) : CaptureEffect
+    data class ShowMessage(val message: String) : CaptureEffect
+}
 
 class CaptureViewModel(
     private val memoryRepository: MemoryRepository,
 ) : ViewModel() {
 
-    private val inputTextFlow = MutableStateFlow("")
-    private val submittingFlow = MutableStateFlow(false)
-
-    val uiState: StateFlow<CaptureUiState> = combine(
-        memoryRepository.memoriesFlow,
-        inputTextFlow,
-        submittingFlow,
-    ) { memories, input, submitting ->
-        CaptureUiState(
-            memories = memories,
-            inputText = input,
-            isSubmitting = submitting,
+    val memories: StateFlow<List<MemoryItem>> = memoryRepository.observeMemories()
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000L),
+            initialValue = emptyList(),
         )
-    }.stateIn(
-        scope = viewModelScope,
-        started = SharingStarted.WhileSubscribed(5_000L),
-        initialValue = CaptureUiState(),
-    )
 
-    fun updateInput(text: String) {
-        inputTextFlow.value = text
+    private val _inputText = MutableStateFlow("")
+    val inputText: StateFlow<String> = _inputText.asStateFlow()
+
+    private val _isSubmitting = MutableStateFlow(false)
+    val isSubmitting: StateFlow<Boolean> = _isSubmitting.asStateFlow()
+
+    private val effectChannel = Channel<CaptureEffect>(Channel.BUFFERED)
+    val effects: Flow<CaptureEffect> = effectChannel.receiveAsFlow()
+
+    fun onIntent(intent: CaptureIntent) {
+        when (intent) {
+            is CaptureIntent.UpdateInput -> _inputText.value = intent.text
+            is CaptureIntent.FillSample -> _inputText.value = intent.sample
+            CaptureIntent.SubmitCapture -> submitCapture()
+            is CaptureIntent.RequestAddCalendar -> {
+                effectChannel.trySend(
+                    CaptureEffect.LaunchCalendarInsert(
+                        memoryId = intent.memoryId,
+                        proposal = intent.proposal,
+                    ),
+                )
+            }
+            is CaptureIntent.ConfirmCalendarLaunchResult -> handleCalendarLaunchResult(intent)
+        }
     }
 
-    fun fillSample(sample: String) {
-        inputTextFlow.value = sample
-    }
-
-    fun submitCapture() {
-        val raw = inputTextFlow.value.trim()
-        if (raw.isEmpty() || submittingFlow.value) return
+    private fun submitCapture() {
+        val raw = _inputText.value.trim()
+        if (raw.isEmpty() || _isSubmitting.value) return
         viewModelScope.launch {
-            submittingFlow.value = true
+            _isSubmitting.value = true
             try {
                 memoryRepository.captureMemory(raw)
-                inputTextFlow.value = ""
+                _inputText.value = ""
             } finally {
-                submittingFlow.value = false
+                _isSubmitting.value = false
             }
         }
     }
 
-    fun markCalendarSaved(memoryId: String) {
+    private fun handleCalendarLaunchResult(result: CaptureIntent.ConfirmCalendarLaunchResult) {
         viewModelScope.launch {
-            memoryRepository.markCalendarSaved(memoryId)
+            if (result.launched) {
+                memoryRepository.markCalendarSaved(result.memoryId)
+                effectChannel.send(CaptureEffect.ShowMessage("已拉起系统日历草稿：${result.title}"))
+            } else {
+                effectChannel.send(CaptureEffect.ShowMessage("未检测到可用的系统日历应用"))
+            }
         }
-    }
-
-    class Factory(
-        private val memoryRepository: MemoryRepository,
-    ) : ViewModelProvider.Factory {
-        @Suppress("UNCHECKED_CAST")
-        override fun <T : ViewModel> create(modelClass: Class<T>): T =
-            CaptureViewModel(memoryRepository) as T
     }
 }

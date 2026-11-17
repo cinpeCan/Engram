@@ -11,10 +11,9 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        val appContainer = (application as EngramApplication).container
         setContent {
             EngramTheme {
-                EngramWorkspace(container = appContainer)
+                EngramWorkspace()
             }
         }
     }

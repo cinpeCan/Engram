@@ -43,6 +43,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -62,32 +63,78 @@ import io.github.cinpecan.engram.domain.model.CalendarProposal
 import io.github.cinpecan.engram.domain.model.MemoryAnalysisStatus
 import io.github.cinpecan.engram.domain.model.MemoryItem
 import io.github.cinpecan.engram.ui.components.CollapsibleBottomConsoleLayout
+import io.github.cinpecan.engram.ui.navigation.EngramNavKey
+import io.github.cinpecan.engram.ui.navigation.EngramNavigator
+import io.github.cinpecan.engram.ui.navigation.LocalEngramNavigator
+import io.github.cinpecan.engram.ui.viewmodel.CaptureEffect
+import io.github.cinpecan.engram.ui.viewmodel.CaptureIntent
 import io.github.cinpecan.engram.ui.viewmodel.CaptureViewModel
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import org.koin.compose.viewmodel.koinViewModel
+
+@Composable
+fun CaptureRoute(
+    modifier: Modifier = Modifier,
+    viewModel: CaptureViewModel = koinViewModel(),
+    navigator: EngramNavigator = LocalEngramNavigator.current,
+) {
+    val memories by viewModel.memories.collectAsStateWithLifecycle()
+    val inputText by viewModel.inputText.collectAsStateWithLifecycle()
+    val isSubmitting by viewModel.isSubmitting.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+
+    LaunchedEffect(viewModel, context) {
+        viewModel.effects.collect { effect ->
+            when (effect) {
+                is CaptureEffect.LaunchCalendarInsert -> {
+                    val launched = CalendarToolExecutor.launchCalendarInsert(context, effect.proposal)
+                    viewModel.onIntent(
+                        CaptureIntent.ConfirmCalendarLaunchResult(
+                            memoryId = effect.memoryId,
+                            title = effect.proposal.title,
+                            launched = launched,
+                        ),
+                    )
+                }
+                is CaptureEffect.ShowMessage -> navigator.showMessage(effect.message)
+            }
+        }
+    }
+
+    CaptureScreen(
+        memories = memories,
+        inputText = inputText,
+        isSubmitting = isSubmitting,
+        onIntent = viewModel::onIntent,
+        onOpenGraph = navigator::openGraphForMemory,
+        onOpenRawMemory = { id -> navigator.openOverlay(EngramNavKey.RawMemory(id)) },
+        modifier = modifier,
+    )
+}
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun CaptureScreen(
-    viewModel: CaptureViewModel,
+    memories: List<MemoryItem>,
+    inputText: String,
+    isSubmitting: Boolean,
+    onIntent: (CaptureIntent) -> Unit,
     onOpenGraph: (String) -> Unit,
     onOpenRawMemory: (String) -> Unit,
-    onShowMessage: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val state by viewModel.uiState.collectAsStateWithLifecycle()
-    val context = LocalContext.current
     val focusManager = LocalFocusManager.current
     var isInputFocused by remember { mutableStateOf(false) }
 
-    val isInputEmpty = state.inputText.isEmpty()
-    val lockConsoleExpanded = state.inputText.isNotBlank() || state.isSubmitting
+    val isInputEmpty = inputText.isEmpty()
+    val lockConsoleExpanded = inputText.isNotBlank() || isSubmitting
 
     CollapsibleBottomConsoleLayout(
         lockExpanded = lockConsoleExpanded,
         onUserScroll = {
-            if (isInputFocused && state.inputText.isBlank()) {
+            if (isInputFocused && inputText.isBlank()) {
                 focusManager.clearFocus()
             }
         },
@@ -103,18 +150,18 @@ fun CaptureScreen(
                 ),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                items(state.memories, key = { it.id }) { memory ->
+                items(memories, key = { it.id }) { memory ->
                     MemoryTimelineCard(
                         memory = memory,
                         onOpenGraph = { onOpenGraph(memory.id) },
                         onOpenRawMemory = { onOpenRawMemory(memory.id) },
                         onAddCalendar = { proposal ->
-                            val launched = CalendarToolExecutor.launchCalendarInsert(context, proposal)
-                            if (launched) {
-                                onShowMessage("已拉起系统日历草稿：${proposal.title}")
-                            } else {
-                                onShowMessage("未检测到可用的系统日历应用")
-                            }
+                            onIntent(
+                                CaptureIntent.RequestAddCalendar(
+                                    memoryId = memory.id,
+                                    proposal = proposal,
+                                ),
+                            )
                         },
                     )
                 }
@@ -138,7 +185,7 @@ fun CaptureScreen(
                         ) {
                             item {
                                 AssistChip(
-                                    onClick = { viewModel.fillSample(SAMPLE_RELATION_NOTE) },
+                                    onClick = { onIntent(CaptureIntent.FillSample(SAMPLE_RELATION_NOTE)) },
                                     leadingIcon = {
                                         Icon(
                                             imageVector = Icons.Rounded.Hub,
@@ -157,7 +204,7 @@ fun CaptureScreen(
                             }
                             item {
                                 AssistChip(
-                                    onClick = { viewModel.fillSample(SAMPLE_CALENDAR_NOTE) },
+                                    onClick = { onIntent(CaptureIntent.FillSample(SAMPLE_CALENDAR_NOTE)) },
                                     leadingIcon = {
                                         Icon(
                                             imageVector = Icons.Rounded.CalendarMonth,
@@ -182,8 +229,8 @@ fun CaptureScreen(
                         verticalAlignment = if (isInputEmpty) Alignment.CenterVertically else Alignment.Bottom,
                     ) {
                         OutlinedTextField(
-                            value = state.inputText,
-                            onValueChange = viewModel::updateInput,
+                            value = inputText,
+                            onValueChange = { onIntent(CaptureIntent.UpdateInput(it)) },
                             modifier = Modifier
                                 .weight(1f)
                                 .onFocusChanged { isInputFocused = it.isFocused },
@@ -200,8 +247,8 @@ fun CaptureScreen(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         FilledIconButton(
-                            onClick = viewModel::submitCapture,
-                            enabled = state.inputText.isNotBlank() && !state.isSubmitting,
+                            onClick = { onIntent(CaptureIntent.SubmitCapture) },
+                            enabled = inputText.isNotBlank() && !isSubmitting,
                             modifier = Modifier.size(48.dp),
                         ) {
                             Icon(
@@ -361,6 +408,7 @@ private fun MemoryTimelineCard(
                 memory.calendarProposal?.let { proposal ->
                     ScheduleInlineStrip(
                         proposal = proposal,
+                        calendarSaved = memory.calendarSaved,
                         onAddCalendar = { onAddCalendar(proposal) },
                     )
                 }
@@ -424,6 +472,7 @@ private fun MemoryTimelineCard(
 @Composable
 private fun ScheduleInlineStrip(
     proposal: CalendarProposal,
+    calendarSaved: Boolean,
     onAddCalendar: () -> Unit,
 ) {
     val scheduleSubtitle = buildString {
@@ -479,9 +528,9 @@ private fun ScheduleInlineStrip(
                 modifier = Modifier.height(30.dp),
             ) {
                 Text(
-                    text = "添至日历",
+                    text = if (calendarSaved) "已添至日历" else "添至日历",
                     style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.secondary,
+                    color = if (calendarSaved) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary,
                 )
             }
         }

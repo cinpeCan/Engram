@@ -24,100 +24,140 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import io.github.cinpecan.engram.domain.model.MemoryItem
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import io.github.cinpecan.engram.ui.navigation.EngramNavigator
+import io.github.cinpecan.engram.ui.navigation.LocalEngramNavigator
+import io.github.cinpecan.engram.ui.viewmodel.RawMemoryUiState
+import io.github.cinpecan.engram.ui.viewmodel.RawMemoryViewModel
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import org.koin.compose.viewmodel.koinViewModel
+import org.koin.core.parameter.parametersOf
+
+@Composable
+fun RawMemoryRoute(
+    memoryId: String,
+    modifier: Modifier = Modifier,
+    viewModel: RawMemoryViewModel = koinViewModel(key = memoryId) { parametersOf(memoryId) },
+    navigator: EngramNavigator = LocalEngramNavigator.current,
+) {
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    RawMemorySheetContent(
+        uiState = uiState,
+        onCopied = { navigator.showMessage("已复制原文到剪贴板") },
+        modifier = modifier,
+    )
+}
 
 @Composable
 fun RawMemorySheetContent(
-    memory: MemoryItem?,
+    uiState: RawMemoryUiState,
     onCopied: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
 
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(horizontal = 20.dp, vertical = 4.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        if (memory == null) {
-            Text(
-                text = "未找到对应的印迹原文",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(vertical = 24.dp),
+    when (uiState) {
+        RawMemoryUiState.Loading -> {
+            Spacer(
+                modifier = modifier
+                    .fillMaxWidth()
+                    .navigationBarsPadding()
+                    .height(120.dp),
             )
-            Spacer(modifier = Modifier.navigationBarsPadding().height(12.dp))
-            return
         }
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(
-                    text = "原始印迹",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
-                Text(
-                    text = "${formatFullTimestamp(memory.createdAtMillis)} · ${memory.content.length} 字",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-
-            IconButton(
-                onClick = {
-                    val clipboard = context.getSystemService(ClipboardManager::class.java)
-                    clipboard?.setPrimaryClip(ClipData.newPlainText("engram_raw", memory.content))
-                    onCopied()
-                },
+        RawMemoryUiState.NotFound -> {
+            Column(
+                modifier = modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                Icon(
-                    imageVector = Icons.Rounded.ContentCopy,
-                    contentDescription = "复制原文",
-                    modifier = Modifier.size(20.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-
-        HorizontalDivider(
-            thickness = 0.5.dp,
-            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
-        )
-
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(min = 96.dp, max = 440.dp)
-                .verticalScroll(rememberScrollState()),
-        ) {
-            SelectionContainer {
                 Text(
-                    text = memory.content,
-                    style = MaterialTheme.typography.bodyLarge.copy(lineHeight = 24.sp),
-                    color = MaterialTheme.colorScheme.onSurface,
+                    text = "未找到对应的印迹原文",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(vertical = 24.dp),
+                )
+                Spacer(modifier = Modifier.navigationBarsPadding().height(12.dp))
+            }
+        }
+        is RawMemoryUiState.Ready -> {
+            val memory = uiState.memory
+            Column(
+                modifier = modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text(
+                            text = "原始印迹",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                        Text(
+                            text = "${formatFullTimestamp(memory.createdAtMillis)} · ${memory.content.length} 字",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+
+                    IconButton(
+                        onClick = {
+                            val clipboard = context.getSystemService(ClipboardManager::class.java)
+                            clipboard?.setPrimaryClip(ClipData.newPlainText("engram_raw", memory.content))
+                            onCopied()
+                        },
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.ContentCopy,
+                            contentDescription = "复制原文",
+                            modifier = Modifier.size(20.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+
+                HorizontalDivider(
+                    thickness = 0.5.dp,
+                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+                )
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 96.dp, max = 440.dp)
+                        .verticalScroll(rememberScrollState()),
+                ) {
+                    SelectionContainer {
+                        Text(
+                            text = memory.content,
+                            style = MaterialTheme.typography.bodyLarge.copy(lineHeight = 24.sp),
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
+                }
+
+                Spacer(
+                    modifier = Modifier
+                        .navigationBarsPadding()
+                        .height(12.dp),
                 )
             }
         }
-
-        Spacer(
-            modifier = Modifier
-                .navigationBarsPadding()
-                .height(12.dp),
-        )
     }
 }
 

@@ -178,9 +178,9 @@ fun rememberCollapsibleConsoleState(): CollapsibleConsoleState {
 @Composable
 fun CollapsibleBottomConsoleLayout(
     lockExpanded: Boolean,
+    modifier: Modifier = Modifier,
     onUserScroll: () -> Unit = {},
     extraBottomListPadding: Dp = 12.dp,
-    modifier: Modifier = Modifier,
     listContent: @Composable (bottomContentPadding: Dp) -> Unit,
     consoleContent: @Composable () -> Unit,
 ) {

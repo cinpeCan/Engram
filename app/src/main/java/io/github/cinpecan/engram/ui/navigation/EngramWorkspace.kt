@@ -9,7 +9,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -42,16 +41,14 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
-import androidx.compose.material3.VerticalDivider
+import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
+import androidx.compose.material3.adaptive.navigation3.rememberListDetailSceneStrategy
 import androidx.compose.material3.rememberTopAppBarState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -61,64 +58,38 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.navigation3.runtime.NavEntry
+import androidx.lifecycle.viewmodel.navigation3.rememberViewModelStoreNavEntryDecorator
+import androidx.navigation3.runtime.NavKey
+import androidx.navigation3.runtime.rememberSaveableStateHolderNavEntryDecorator
 import androidx.navigation3.scene.SinglePaneSceneStrategy
 import androidx.navigation3.ui.NavDisplay
-import io.github.cinpecan.engram.di.EngramContainer
+import io.github.cinpecan.engram.edgemnn.EdgeAiEngine
 import io.github.cinpecan.engram.edgemnn.EngineState
-import io.github.cinpecan.engram.ui.ask.AskScreen
-import io.github.cinpecan.engram.ui.capture.CaptureScreen
-import io.github.cinpecan.engram.ui.capture.RawMemorySheetContent
-import io.github.cinpecan.engram.ui.engine.EngineBottomSheetContent
-import io.github.cinpecan.engram.ui.graph.GraphScreen
-import io.github.cinpecan.engram.ui.viewmodel.AskViewModel
-import io.github.cinpecan.engram.ui.viewmodel.CaptureViewModel
-import io.github.cinpecan.engram.ui.viewmodel.EngineViewModel
-import io.github.cinpecan.engram.ui.viewmodel.GraphViewModel
-import kotlinx.coroutines.launch
+import java.util.Locale
+import org.koin.compose.koinInject
+import org.koin.compose.navigation3.koinEntryProvider
+import org.koin.core.annotation.KoinExperimentalAPI
 
-sealed interface EngramNavKey {
-    sealed interface Overlay : EngramNavKey
-
-    data object Capture : EngramNavKey
-    data class Graph(val memoryId: String? = null) : EngramNavKey
-    data object Ask : EngramNavKey
-
-    data class RawMemory(val memoryId: String) : Overlay
-    data object EngineSheet : Overlay
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(
+    ExperimentalMaterial3Api::class,
+    ExperimentalMaterial3AdaptiveApi::class,
+    KoinExperimentalAPI::class,
+)
 @Composable
-fun EngramWorkspace(container: EngramContainer) {
-    val captureVm: CaptureViewModel = viewModel(
-        factory = CaptureViewModel.Factory(container.memoryRepository),
-    )
-    val graphVm: GraphViewModel = viewModel(
-        factory = GraphViewModel.Factory(container.memoryRepository),
-    )
-    val askVm: AskViewModel = viewModel(
-        factory = AskViewModel.Factory(container.inferenceRouter, container.preferencesRepository),
-    )
-    val engineVm: EngineViewModel = viewModel(
-        factory = EngineViewModel.Factory(
-            container.edgeEngine,
-            container.modelDownloadManager,
-            container.preferencesRepository,
-        ),
-    )
-
-    val backStack = remember { mutableStateListOf<EngramNavKey>(EngramNavKey.Capture) }
-    val activeTabKey = backStack.lastOrNull { it !is EngramNavKey.Overlay } ?: EngramNavKey.Capture
-
-    val engineSheetState by engineVm.uiState.collectAsStateWithLifecycle()
-    val captureState by captureVm.uiState.collectAsStateWithLifecycle()
-
-    var activeGraphMemoryId by remember { mutableStateOf<String?>(null) }
+fun EngramWorkspace(
+    modifier: Modifier = Modifier,
+    edgeEngine: EdgeAiEngine = koinInject(),
+) {
+    val navigator = rememberEngramNavigator()
+    val activeTabKey = navigator.activeTabKey
+    val engineState by edgeEngine.state.collectAsStateWithLifecycle()
 
     val snackbarHostState = remember { SnackbarHostState() }
-    val uiScope = rememberCoroutineScope()
+    LaunchedEffect(navigator) {
+        navigator.messages.collect { msg ->
+            snackbarHostState.showSnackbar(msg)
+        }
+    }
 
     val topBarState = rememberTopAppBarState()
     val topBarScrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior(
@@ -130,194 +101,59 @@ fun EngramWorkspace(container: EngramContainer) {
         topBarState.heightOffset = 0f
     }
 
-    fun showMessage(msg: String) {
-        uiScope.launch { snackbarHostState.showSnackbar(msg) }
-    }
-
-    fun popTrailingOverlays() {
-        while (backStack.lastOrNull() is EngramNavKey.Overlay) {
-            backStack.removeAt(backStack.lastIndex)
-        }
-    }
-
-    fun navigateTopTab(target: EngramNavKey) {
-        if (activeTabKey::class == target::class && backStack.none { it is EngramNavKey.Overlay }) {
-            return
-        }
-        backStack.clear()
-        backStack.add(EngramNavKey.Capture)
-        if (target != EngramNavKey.Capture) {
-            backStack.add(target)
-        }
-    }
-
-    fun openGraphForMemory(memoryId: String) {
-        popTrailingOverlays()
-        activeGraphMemoryId = memoryId
-        val target = EngramNavKey.Graph(memoryId)
-        if (backStack.lastOrNull() is EngramNavKey.Graph) {
-            backStack[backStack.lastIndex] = target
-        } else {
-            backStack.add(target)
-        }
-    }
-
-    fun openOverlay(overlay: EngramNavKey.Overlay) {
-        if (backStack.lastOrNull() is EngramNavKey.Overlay) {
-            backStack[backStack.lastIndex] = overlay
-        } else {
-            backStack.add(overlay)
-        }
-    }
-
-    val sceneStrategies = remember {
+    val bottomSheetStrategy = remember { BottomSheetSceneStrategy<NavKey>() }
+    val listDetailStrategy = rememberListDetailSceneStrategy<NavKey>()
+    val singlePaneStrategy = remember { SinglePaneSceneStrategy<NavKey>() }
+    val sceneStrategies = remember(bottomSheetStrategy, listDetailStrategy, singlePaneStrategy) {
         listOf(
-            BottomSheetSceneStrategy<EngramNavKey>(),
-            SinglePaneSceneStrategy(),
+            bottomSheetStrategy,
+            listDetailStrategy,
+            singlePaneStrategy,
         )
     }
 
-    Scaffold(
-        modifier = Modifier.nestedScroll(topBarScrollBehavior.nestedScrollConnection),
-        snackbarHost = { SnackbarHost(snackbarHostState) },
-        topBar = {
-            TopAppBar(
-                title = { Text("Engram · 印迹") },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background,
-                    scrolledContainerColor = MaterialTheme.colorScheme.surface,
-                ),
-                scrollBehavior = topBarScrollBehavior,
-                actions = {
-                    EngineStatusPill(
-                        engineState = engineSheetState.engineState,
-                        nativeHeapMb = engineSheetState.nativeHeapMb,
-                        onClick = { openOverlay(EngramNavKey.EngineSheet) },
-                        modifier = Modifier.padding(end = 12.dp),
-                    )
-                },
-            )
-        },
-        bottomBar = {
-            EngramSlimBottomBar(
-                activeTabKey = activeTabKey,
-                onSelectCapture = { navigateTopTab(EngramNavKey.Capture) },
-                onSelectGraph = {
-                    val defaultGraphId = activeGraphMemoryId
-                        ?: captureState.memories.firstOrNull { it.relations.isNotEmpty() }?.id
-                    navigateTopTab(EngramNavKey.Graph(defaultGraphId))
-                },
-                onSelectAsk = { navigateTopTab(EngramNavKey.Ask) },
-            )
-        },
-    ) { innerPadding ->
-        BoxWithConstraints(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding),
-        ) {
-            val isWideScreen = maxWidth >= 720.dp
-
+    CompositionLocalProvider(LocalEngramNavigator provides navigator) {
+        Scaffold(
+            modifier = modifier.nestedScroll(topBarScrollBehavior.nestedScrollConnection),
+            snackbarHost = { SnackbarHost(snackbarHostState) },
+            topBar = {
+                TopAppBar(
+                    title = { Text("Engram · 印迹") },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.background,
+                        scrolledContainerColor = MaterialTheme.colorScheme.surface,
+                    ),
+                    scrollBehavior = topBarScrollBehavior,
+                    actions = {
+                        EngineStatusPill(
+                            engineState = engineState,
+                            onClick = { navigator.openOverlay(EngramNavKey.EngineSheet) },
+                            modifier = Modifier.padding(end = 12.dp),
+                        )
+                    },
+                )
+            },
+            bottomBar = {
+                EngramSlimBottomBar(
+                    activeTabKey = activeTabKey,
+                    onSelectCapture = { navigator.navigateTopTab(EngramNavKey.Capture) },
+                    onSelectGraph = { navigator.navigateTopTab(EngramNavKey.Graph) },
+                    onSelectAsk = { navigator.navigateTopTab(EngramNavKey.Ask) },
+                )
+            },
+        ) { innerPadding ->
             NavDisplay(
-                backStack = backStack,
-                onBack = {
-                    if (backStack.size > 1) {
-                        backStack.removeAt(backStack.lastIndex)
-                    }
-                },
+                backStack = navigator.backStack,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding),
+                onBack = navigator::goBack,
+                entryDecorators = listOf(
+                    rememberSaveableStateHolderNavEntryDecorator<NavKey>(),
+                    rememberViewModelStoreNavEntryDecorator<NavKey>(),
+                ),
                 sceneStrategies = sceneStrategies,
-                entryProvider = { key ->
-                    when (key) {
-                        is EngramNavKey.Capture -> NavEntry(key) {
-                            if (isWideScreen) {
-                                Row(modifier = Modifier.fillMaxSize()) {
-                                    CaptureScreen(
-                                        viewModel = captureVm,
-                                        onOpenGraph = { id -> activeGraphMemoryId = id },
-                                        onOpenRawMemory = { id -> openOverlay(EngramNavKey.RawMemory(id)) },
-                                        onShowMessage = ::showMessage,
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .fillMaxHeight(),
-                                    )
-                                    VerticalDivider()
-                                    val selectedId = activeGraphMemoryId
-                                        ?: captureState.memories.firstOrNull { it.relations.isNotEmpty() }?.id
-                                    GraphScreen(
-                                        memoryId = selectedId,
-                                        viewModel = graphVm,
-                                        onOpenRawMemory = { id -> openOverlay(EngramNavKey.RawMemory(id)) },
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .fillMaxHeight(),
-                                    )
-                                }
-                            } else {
-                                CaptureScreen(
-                                    viewModel = captureVm,
-                                    onOpenGraph = ::openGraphForMemory,
-                                    onOpenRawMemory = { id -> openOverlay(EngramNavKey.RawMemory(id)) },
-                                    onShowMessage = ::showMessage,
-                                )
-                            }
-                        }
-                        is EngramNavKey.Graph -> NavEntry(key) {
-                            if (isWideScreen) {
-                                Row(modifier = Modifier.fillMaxSize()) {
-                                    CaptureScreen(
-                                        viewModel = captureVm,
-                                        onOpenGraph = { id -> activeGraphMemoryId = id },
-                                        onOpenRawMemory = { id -> openOverlay(EngramNavKey.RawMemory(id)) },
-                                        onShowMessage = ::showMessage,
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .fillMaxHeight(),
-                                    )
-                                    VerticalDivider()
-                                    val selectedId = activeGraphMemoryId
-                                        ?: key.memoryId
-                                        ?: captureState.memories.firstOrNull { it.relations.isNotEmpty() }?.id
-                                    GraphScreen(
-                                        memoryId = selectedId,
-                                        viewModel = graphVm,
-                                        onOpenRawMemory = { id -> openOverlay(EngramNavKey.RawMemory(id)) },
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .fillMaxHeight(),
-                                    )
-                                }
-                            } else {
-                                GraphScreen(
-                                    memoryId = key.memoryId ?: activeGraphMemoryId,
-                                    viewModel = graphVm,
-                                    onOpenRawMemory = { id -> openOverlay(EngramNavKey.RawMemory(id)) },
-                                )
-                            }
-                        }
-                        is EngramNavKey.Ask -> NavEntry(key) {
-                            AskScreen(
-                                viewModel = askVm,
-                                onOpenRawMemory = { id -> openOverlay(EngramNavKey.RawMemory(id)) },
-                            )
-                        }
-                        is EngramNavKey.RawMemory -> NavEntry(
-                            key = key,
-                            metadata = BottomSheetSceneStrategy.bottomSheet(),
-                        ) {
-                            val memory = captureState.memories.firstOrNull { it.id == key.memoryId }
-                            RawMemorySheetContent(
-                                memory = memory,
-                                onCopied = { showMessage("已复制原文到剪贴板") },
-                            )
-                        }
-                        is EngramNavKey.EngineSheet -> NavEntry(
-                            key = key,
-                            metadata = BottomSheetSceneStrategy.bottomSheet(),
-                        ) {
-                            EngineBottomSheetContent(viewModel = engineVm)
-                        }
-                    }
-                },
+                entryProvider = koinEntryProvider<NavKey>(),
             )
         }
     }
@@ -441,7 +277,6 @@ private fun SlimNavItem(
 @Composable
 private fun EngineStatusPill(
     engineState: EngineState,
-    nativeHeapMb: Double,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -455,7 +290,11 @@ private fun EngineStatusPill(
     val text = when (engineState) {
         EngineState.Unloaded -> "引擎未加载"
         is EngineState.Loading -> "加载中…"
-        is EngineState.Ready -> String.format("MNN 就绪 · %.0fMB", nativeHeapMb)
+        is EngineState.Ready -> String.format(
+            Locale.US,
+            "MNN 就绪 · %.0fMB",
+            engineState.nativeHeapBytes / (1024.0 * 1024.0),
+        )
         is EngineState.Generating -> "端侧推理中…"
         is EngineState.Releasing -> "释放内存…"
         is EngineState.Error -> "引擎异常"

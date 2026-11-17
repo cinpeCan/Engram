@@ -2,12 +2,13 @@ package io.github.cinpecan.engram.data.local
 
 import io.github.cinpecan.engram.domain.model.MemoryAnalysisPayload
 import io.github.cinpecan.engram.domain.model.MemoryItem
-import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.Flow
 
 interface LocalMemoryStore {
-    val memoriesFlow: StateFlow<List<MemoryItem>>
+    fun observeMemories(): Flow<List<MemoryItem>>
+    fun observeMemoryById(memoryId: String): Flow<MemoryItem?>
+    fun observeMemoriesForEntity(entityName: String): Flow<List<MemoryItem>>
 
-    suspend fun refresh()
     suspend fun insertRawMemory(item: MemoryItem)
     suspend fun updateMemoryAnalysis(
         memoryId: String,

@@ -14,8 +14,8 @@ import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -29,13 +29,20 @@ class MemoryRepository(
 ) {
     private val seedMutex = Mutex()
 
-    val memoriesFlow: StateFlow<List<MemoryItem>> = store.memoriesFlow
+    fun observeMemories(): Flow<List<MemoryItem>> = store.observeMemories()
+
+    fun observeMemoryById(memoryId: String): Flow<MemoryItem?> = store.observeMemoryById(memoryId)
+
+    fun observeMemoriesForEntity(entityName: String): Flow<List<MemoryItem>> =
+        store.observeMemoriesForEntity(entityName).map { directMatches ->
+            directMatches.ifEmpty {
+                searchHybrid(entityName, topK = 3).map { it.memory }
+            }
+        }
 
     suspend fun initializeAndSeedIfNeeded() {
         seedMutex.withLock {
-            store.refresh()
-            val prefs = preferencesRepository?.preferencesFlow?.first()
-            if (store.countMemories() == 0 && prefs?.hasSeededStoryline != true) {
+            if (store.countMemories() == 0) {
                 val seeds = SeedStorylineProvider.createInitialStoryline()
                 for (seed in seeds) {
                     store.insertRawMemory(seed)

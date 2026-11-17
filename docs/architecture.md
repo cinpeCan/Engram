@@ -6,8 +6,8 @@
 flowchart TB
     Contracts["contracts/*.schema.json\n(Single Source of Truth)"]
 
-    subgraph AndroidApp[":app (Kotlin + Compose + Nav3 1.2.1)"]
-        Capture["CaptureScreen\n(MVI + Calendar Confirmation Card)"]
+    subgraph AndroidApp[":app (Kotlin + Compose + Nav3 1.2.1 + Koin 4.2 + ListDetailSceneStrategy)"]
+        Capture["CaptureScreen\n(Stream MVI + Calendar Confirmation Card)"]
         Graph["GraphScreen\n(Deponder 0.5.0 2D Capsules & Springs)"]
         Ask["AskScreen\n(Offline/Cloud Switch + Telemetry)"]
         Sheet["EngineBottomSheet\n(Resumable Range Download + Memory Release)"]
@@ -16,7 +16,7 @@ flowchart TB
         Retriever["RrfHybridScorer\n(CJK Bigram FTS4 + Cosine)"]
         Router["UnifiedInferenceRouter"]
 
-        SQLite["EngramSqliteStore\n(WAL + FTS4 + BLOB + Relations)"]
+        SQLite["EngramDatabase / RoomMemoryStore\n(Room WAL + @Fts4 + @Relation Cold Flow)"]
         Prefs["EnginePreferencesRepository\n(DataStore Config Only)"]
     end
 

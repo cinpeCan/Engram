@@ -1,7 +1,9 @@
 package io.github.cinpecan.engram.data.remote
 
+import androidx.compose.runtime.Immutable
 import kotlinx.serialization.Serializable
 
+@Immutable
 @Serializable
 data class ModelFileDto(
     val name: String,
@@ -10,6 +12,7 @@ data class ModelFileDto(
     val sha256: String,
 )
 
+@Immutable
 @Serializable
 data class ModelDescriptorDto(
     val id: String,

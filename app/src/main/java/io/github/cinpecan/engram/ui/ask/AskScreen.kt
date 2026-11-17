@@ -47,21 +47,52 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.cinpecan.engram.domain.model.InferenceMode
 import io.github.cinpecan.engram.ui.components.CollapsibleBottomConsoleLayout
+import io.github.cinpecan.engram.ui.navigation.EngramNavKey
+import io.github.cinpecan.engram.ui.navigation.EngramNavigator
+import io.github.cinpecan.engram.ui.navigation.LocalEngramNavigator
 import io.github.cinpecan.engram.ui.viewmodel.AskConversationTurn
+import io.github.cinpecan.engram.ui.viewmodel.AskIntent
 import io.github.cinpecan.engram.ui.viewmodel.AskViewModel
+import java.util.Locale
+import org.koin.compose.viewmodel.koinViewModel
+
+@Composable
+fun AskRoute(
+    modifier: Modifier = Modifier,
+    viewModel: AskViewModel = koinViewModel(),
+    navigator: EngramNavigator = LocalEngramNavigator.current,
+) {
+    val inferenceMode by viewModel.inferenceMode.collectAsStateWithLifecycle()
+    val turns by viewModel.turns.collectAsStateWithLifecycle()
+    val queryInput by viewModel.queryInput.collectAsStateWithLifecycle()
+    val isAsking by viewModel.isAsking.collectAsStateWithLifecycle()
+
+    AskScreen(
+        inferenceMode = inferenceMode,
+        turns = turns,
+        queryInput = queryInput,
+        isAsking = isAsking,
+        onIntent = viewModel::onIntent,
+        modifier = modifier,
+        onOpenRawMemory = { id -> navigator.openOverlay(EngramNavKey.RawMemory(id)) },
+    )
+}
 
 @Composable
 fun AskScreen(
-    viewModel: AskViewModel,
-    onOpenRawMemory: (String) -> Unit = {},
+    inferenceMode: InferenceMode,
+    turns: List<AskConversationTurn>,
+    queryInput: String,
+    isAsking: Boolean,
+    onIntent: (AskIntent) -> Unit,
     modifier: Modifier = Modifier,
+    onOpenRawMemory: (String) -> Unit = {},
 ) {
-    val state by viewModel.uiState.collectAsStateWithLifecycle()
     val focusManager = LocalFocusManager.current
     var isInputFocused by remember { mutableStateOf(false) }
 
-    val isQueryEmpty = state.queryInput.isEmpty()
-    val lockConsoleExpanded = state.queryInput.isNotBlank() || state.isAsking
+    val isQueryEmpty = queryInput.isEmpty()
+    val lockConsoleExpanded = queryInput.isNotBlank() || isAsking
 
     Column(
         modifier = modifier.fillMaxSize(),
@@ -77,8 +108,8 @@ fun AskScreen(
             ) {
                 SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
                     SegmentedButton(
-                        selected = state.mode == InferenceMode.OFFLINE_EDGE,
-                        onClick = { viewModel.setMode(InferenceMode.OFFLINE_EDGE) },
+                        selected = inferenceMode == InferenceMode.OFFLINE_EDGE,
+                        onClick = { onIntent(AskIntent.SelectMode(InferenceMode.OFFLINE_EDGE)) },
                         shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
                         icon = {
                             Icon(
@@ -91,8 +122,8 @@ fun AskScreen(
                         Text("纯离线 MNN")
                     }
                     SegmentedButton(
-                        selected = state.mode == InferenceMode.CLOUD_COLLAB,
-                        onClick = { viewModel.setMode(InferenceMode.CLOUD_COLLAB) },
+                        selected = inferenceMode == InferenceMode.CLOUD_COLLAB,
+                        onClick = { onIntent(AskIntent.SelectMode(InferenceMode.CLOUD_COLLAB)) },
                         shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
                         icon = {
                             Icon(
@@ -111,7 +142,7 @@ fun AskScreen(
                 ) {
                     items(SUGGESTED_QUERIES) { suggestion ->
                         AssistChip(
-                            onClick = { viewModel.submitQuery(suggestion) },
+                            onClick = { onIntent(AskIntent.SubmitQuery(suggestion)) },
                             label = {
                                 Text(
                                     text = suggestion,
@@ -128,7 +159,7 @@ fun AskScreen(
         CollapsibleBottomConsoleLayout(
             lockExpanded = lockConsoleExpanded,
             onUserScroll = {
-                if (isInputFocused && state.queryInput.isBlank()) {
+                if (isInputFocused && queryInput.isBlank()) {
                     focusManager.clearFocus()
                 }
             },
@@ -146,7 +177,7 @@ fun AskScreen(
                     ),
                     verticalArrangement = Arrangement.spacedBy(14.dp),
                 ) {
-                    if (state.turns.isEmpty()) {
+                    if (turns.isEmpty()) {
                         item {
                             Card(
                                 shape = RoundedCornerShape(16.dp),
@@ -164,7 +195,7 @@ fun AskScreen(
                         }
                     }
 
-                    items(state.turns, key = { it.id }) { turn ->
+                    items(turns, key = { it.id }) { turn ->
                         AskTurnView(
                             turn = turn,
                             onOpenRawMemory = onOpenRawMemory,
@@ -185,8 +216,8 @@ fun AskScreen(
                         verticalAlignment = if (isQueryEmpty) Alignment.CenterVertically else Alignment.Bottom,
                     ) {
                         OutlinedTextField(
-                            value = state.queryInput,
-                            onValueChange = viewModel::updateQuery,
+                            value = queryInput,
+                            onValueChange = { onIntent(AskIntent.UpdateQuery(it)) },
                             modifier = Modifier
                                 .weight(1f)
                                 .onFocusChanged { isInputFocused = it.isFocused },
@@ -203,8 +234,8 @@ fun AskScreen(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         FilledIconButton(
-                            onClick = { viewModel.submitQuery() },
-                            enabled = state.queryInput.isNotBlank() && !state.isAsking,
+                            onClick = { onIntent(AskIntent.SubmitQuery()) },
+                            enabled = queryInput.isNotBlank() && !isAsking,
                             modifier = Modifier.size(48.dp),
                         ) {
                             Icon(Icons.AutoMirrored.Rounded.Send, contentDescription = "提问")
@@ -259,10 +290,10 @@ private fun AskTurnView(
                     turn.citations.forEachIndexed { idx, hit ->
                         val rankBadge = buildString {
                             append("RRF ")
-                            append(String.format("%.4f", hit.rrfScore))
+                            append(String.format(Locale.US, "%.4f", hit.rrfScore))
                             hit.lexicalRank?.let { append(" · FTS #$it") }
                             hit.vectorRank?.let {
-                                append(" · Vec #$it (${String.format("%.2f", hit.vectorScore)})")
+                                append(" · Vec #$it (${String.format(Locale.US, "%.2f", hit.vectorScore)})")
                             }
                         }
                         Column(
@@ -326,6 +357,7 @@ private fun AskTurnView(
                     ) {
                         Text(
                             text = String.format(
+                                Locale.US,
                                 "%s · TTFT %dms · %.1f tok/s · Native %.1f MB",
                                 t.engineLabel,
                                 t.ttftMs,

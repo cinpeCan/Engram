@@ -39,12 +39,23 @@ sealed interface ModelDownloadState {
 /**
  * Resumable HTTP Range downloader backed by [RandomAccessFile] and streaming SHA-256 verification.
  */
-class ModelDownloadManager(
-    context: Context,
+class ModelDownloadManager internal constructor(
+    private val primaryModelsDir: File,
+    private val externalModelsDir: File?,
     private val okHttpClient: OkHttpClient,
     private val json: Json = Json { ignoreUnknownKeys = true },
 ) {
-    private val appContext = context.applicationContext
+    constructor(
+        context: Context,
+        okHttpClient: OkHttpClient,
+        json: Json = Json { ignoreUnknownKeys = true },
+    ) : this(
+        primaryModelsDir = File(context.applicationContext.filesDir, "models"),
+        externalModelsDir = context.applicationContext.getExternalFilesDir(null)?.let { File(it, "models") },
+        okHttpClient = okHttpClient,
+        json = json,
+    )
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val activeCalls = ConcurrentHashMap<String, Call>()
     private val activeJobs = ConcurrentHashMap<String, Job>()
@@ -85,7 +96,7 @@ class ModelDownloadManager(
         }
 
     fun resolveModelDirectory(modelId: String): File =
-        File(File(appContext.filesDir, "models"), modelId)
+        File(primaryModelsDir, modelId)
 
     fun resolveReadyModelDirPath(modelId: String): String? {
         val model = _catalog.value.firstOrNull { it.id == modelId } ?: return null
@@ -94,8 +105,8 @@ class ModelDownloadManager(
 
     private fun resolveExistingModelDir(model: ModelDescriptorDto): File? {
         val candidates = listOfNotNull(
-            File(File(appContext.filesDir, "models"), model.id),
-            appContext.getExternalFilesDir(null)?.let { File(File(it, "models"), model.id) },
+            File(primaryModelsDir, model.id),
+            externalModelsDir?.let { File(it, model.id) },
         )
         return candidates.firstOrNull { dir ->
             dir.exists() && model.files.all { file -> File(dir, file.name).exists() }

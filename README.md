@@ -8,9 +8,12 @@
 ## Core Architecture Highlights
 
 - **Monorepo & Contract-First (`contracts/`)**: Shared JSON Schemas (`model-manifest`, `memory-analysis`, `chat-sse`) align the Kotlin Android client, `:packages:edge-mnn` C++/JNI runtime, and Python `FastAPI` gateway from a single source of truth, reinforced by root `AGENTS.md` and `.cursor/rules/*.mdc`.
-- **White-Box Memory (SQLite WAL + FTS4 + Cosine + RRF)**:
-  - Instant local persistence across 4 relational/FTS tables (`memories`, `memories_fts`, `memory_embeddings`, `memory_relations`), keeping `DataStore<Preferences>` strictly for lightweight engine configuration.
+- **White-Box Memory (Jetpack Room WAL + `@Fts4` + Cosine + RRF)**:
+  - Instant local persistence across 4 relational/FTS Room tables (`memories`, `memories_fts`, `memory_embeddings`, `memory_relations`) exposed as lazy cold `Flow`s (`@Transaction` + `@Relation`) for on-demand table-tracked subscription, keeping `DataStore<Preferences>` strictly for lightweight engine configuration.
   - Overlapping **CJK Bigram** tokenization + L2-normalized `FloatArray` `BLOB` cosine similarity fused via **Reciprocal Rank Fusion (RRF, `k=60`)**, surfacing source memory citations above every answer.
+- **Koin 4.2 + Navigation 3 + Fine-Grained Stream MVI**:
+  - Uses official Koin-Nav3 integration (`koin-compose-navigation3` `navigation<T>` + `koinEntryProvider()`), per-entry `ViewModelStore` scoping (`rememberViewModelStoreNavEntryDecorator()`), and Material 3 Adaptive `ListDetailSceneStrategy` alongside `BottomSheetSceneStrategy`.
+  - Decouples high-frequency text inputs and stream turns from low-frequency controls into specific `StateFlow` streams (`combine` + `flatMapLatest` + `WhileSubscribed(5_000L)`), driven by sealed `Intent`s and `Channel`-backed one-shot `Effect`s.
 - **2D Directed Relation Graph via [`io.github.cinpecan:deponder-compose:0.5.0`](https://github.com/cinpeCan/Deponder)**:
   - Renders extracted `(Entity A) ──relation──▶ (Entity B)` triples on a 2D force-directed plane using Material 3 rounded capsules and `DeponderDefaultRubber` springs—avoiding overlapping edge labels on mobile viewports and dropping to 0% CPU at rest.
   - Includes **Streaming Growth Replay**, live scale/elasticity controls, and node-tap RAG citation lookup.
@@ -35,7 +38,7 @@ engram/
 │   ├── model-manifest.schema.json
 │   ├── memory-analysis.schema.json
 │   └── chat-sse.schema.json
-├── app/                            # :app Android client (Compose + Nav3 1.2.1 + MVI + SQLite)
+├── app/                            # :app Android client (Compose + Nav3 + Koin + Stream MVI + Room)
 ├── packages/
 │   └── edge-mnn/                   # :packages:edge-mnn C++/JNI MNN runtime & lifecycle guard
 ├── server/                         # Python FastAPI gateway (model catalog & SSE cloud fallback)

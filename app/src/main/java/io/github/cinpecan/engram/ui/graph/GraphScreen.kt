@@ -60,25 +60,60 @@ import com.cinpe.deponder.core.DeponderRubberInsets
 import com.cinpe.deponder.core.PlanetPhysics
 import com.cinpe.deponder.core.RootPhysics
 import com.cinpe.deponder.core.RubberPhysics
+import io.github.cinpecan.engram.ui.navigation.EngramNavKey
+import io.github.cinpecan.engram.ui.navigation.EngramNavigator
+import io.github.cinpecan.engram.ui.navigation.LocalEngramNavigator
+import io.github.cinpecan.engram.ui.viewmodel.EntityCitationState
+import io.github.cinpecan.engram.ui.viewmodel.GraphCanvasState
+import io.github.cinpecan.engram.ui.viewmodel.GraphIntent
+import io.github.cinpecan.engram.ui.viewmodel.GraphMemoryOption
 import io.github.cinpecan.engram.ui.viewmodel.GraphNodeUi
 import io.github.cinpecan.engram.ui.viewmodel.GraphViewModel
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.roundToInt
 import kotlin.math.sin
+import org.koin.compose.viewmodel.koinViewModel
+
+@Composable
+fun GraphRoute(
+    modifier: Modifier = Modifier,
+    viewModel: GraphViewModel = koinViewModel(),
+    navigator: EngramNavigator = LocalEngramNavigator.current,
+) {
+    val selectedMemoryId by navigator.selectedGraphMemoryId.collectAsStateWithLifecycle()
+    LaunchedEffect(selectedMemoryId) {
+        viewModel.onIntent(GraphIntent.BindMemory(selectedMemoryId))
+    }
+
+    val availableMemories by viewModel.availableMemories.collectAsStateWithLifecycle()
+    val canvasState by viewModel.canvasState.collectAsStateWithLifecycle()
+    val entityCitation by viewModel.entityCitation.collectAsStateWithLifecycle()
+
+    GraphScreen(
+        availableMemories = availableMemories,
+        canvasState = canvasState,
+        entityCitation = entityCitation,
+        onIntent = { intent ->
+            if (intent is GraphIntent.BindMemory) {
+                navigator.selectGraphMemory(intent.memoryId)
+            }
+            viewModel.onIntent(intent)
+        },
+        modifier = modifier,
+        onOpenRawMemory = { id -> navigator.openOverlay(EngramNavKey.RawMemory(id)) },
+    )
+}
 
 @Composable
 fun GraphScreen(
-    memoryId: String?,
-    viewModel: GraphViewModel,
-    onOpenRawMemory: (String) -> Unit = {},
+    availableMemories: List<GraphMemoryOption>,
+    canvasState: GraphCanvasState,
+    entityCitation: EntityCitationState?,
+    onIntent: (GraphIntent) -> Unit,
     modifier: Modifier = Modifier,
+    onOpenRawMemory: (String) -> Unit = {},
 ) {
-    LaunchedEffect(memoryId) {
-        viewModel.bindMemory(memoryId)
-    }
-
-    val state by viewModel.uiState.collectAsStateWithLifecycle()
     val deponderState = rememberDeponderState(
         physics = buildGraphRootPhysics(widthDp = 360f, heightDp = 520f),
     )
@@ -109,14 +144,14 @@ fun GraphScreen(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        text = state.memorySummary,
+                        text = canvasState.memorySummary,
                         style = MaterialTheme.typography.titleSmall,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f),
                     )
                     Spacer(modifier = Modifier.width(8.dp))
-                    state.activeMemoryId?.let { activeId ->
+                    canvasState.activeMemoryId?.let { activeId ->
                         IconButton(
                             onClick = { onOpenRawMemory(activeId) },
                             modifier = Modifier.size(32.dp),
@@ -130,8 +165,8 @@ fun GraphScreen(
                         }
                     }
                     FilledTonalButton(
-                        onClick = viewModel::replayStreamingGrowth,
-                        enabled = state.totalEdgeCount > 1 && !state.isReplaying,
+                        onClick = { onIntent(GraphIntent.ReplayGrowth) },
+                        enabled = canvasState.totalEdgeCount > 1 && !canvasState.isReplaying,
                         contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
                     ) {
                         Icon(
@@ -141,7 +176,7 @@ fun GraphScreen(
                         )
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(
-                            text = if (state.isReplaying) "生长中…" else "生长重演",
+                            text = if (canvasState.isReplaying) "生长中…" else "生长重演",
                             style = MaterialTheme.typography.labelMedium,
                         )
                     }
@@ -157,14 +192,14 @@ fun GraphScreen(
                     }
                 }
 
-                if (state.availableMemories.size > 1) {
+                if (availableMemories.size > 1) {
                     LazyRow(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
-                        items(state.availableMemories, key = { it.id }) { option ->
+                        items(availableMemories, key = { it.id }) { option ->
                             FilterChip(
-                                selected = state.activeMemoryId == option.id,
-                                onClick = { viewModel.bindMemory(option.id) },
+                                selected = canvasState.activeMemoryId == option.id,
+                                onClick = { onIntent(GraphIntent.BindMemory(option.id)) },
                                 label = {
                                     Text(
                                         text = "${option.summarySnippet} (${option.edgeCount})",
@@ -188,7 +223,7 @@ fun GraphScreen(
             color = MaterialTheme.colorScheme.surface,
             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         ) {
-            if (state.nodes.isEmpty()) {
+            if (canvasState.nodes.isEmpty()) {
                 Box(
                     modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center,
@@ -215,12 +250,12 @@ fun GraphScreen(
                     val autoScale = computeAutoGraphScale(
                         widthDp = maxWidth.value,
                         heightDp = maxHeight.value,
-                        nodeCount = state.nodes.size,
+                        nodeCount = canvasState.nodes.size,
                     )
                     val seedRadiusDp = (minOf(maxWidth.value, maxHeight.value) * 0.21f)
                         .coerceIn(60f, 88f)
                         .dp
-                    LaunchedEffect(rootPhysics, autoScale, state.activeMemoryId) {
+                    LaunchedEffect(rootPhysics, autoScale, canvasState.activeMemoryId) {
                         deponderState.updatePhysics(rootPhysics)
                         deponderState.submitScale(autoScale)
                     }
@@ -231,7 +266,7 @@ fun GraphScreen(
                             .clipToBounds()
                             .deponderRoot(deponderState),
                     ) {
-                        state.visibleEdges.forEach { edge ->
+                        canvasState.visibleEdges.forEach { edge ->
                             val edgeKey = if (edge.source <= edge.target) {
                                 "${edge.source}__${edge.target}"
                             } else {
@@ -269,9 +304,9 @@ fun GraphScreen(
                             }
                         }
 
-                        val nodeCount = state.nodes.size.coerceAtLeast(1)
+                        val nodeCount = canvasState.nodes.size.coerceAtLeast(1)
                         val seedRadiusPx = with(LocalDensity.current) { seedRadiusDp.toPx() }
-                        state.nodes.forEachIndexed { index, node ->
+                        canvasState.nodes.forEachIndexed { index, node ->
                             val angle = (2.0 * PI * index) / nodeCount
                             val seedOffset = IntOffset(
                                 x = (cos(angle) * seedRadiusPx).roundToInt(),
@@ -280,8 +315,8 @@ fun GraphScreen(
                             key(node.id) {
                                 EntityCapsuleNode(
                                     node = node,
-                                    isSelected = state.selectedEntity == node.id,
-                                    onClick = { viewModel.selectEntity(node.id) },
+                                    isSelected = entityCitation?.entityName == node.id,
+                                    onClick = { onIntent(GraphIntent.SelectEntity(node.id)) },
                                     modifier = Modifier
                                         .align(Alignment.Center)
                                         .offset { seedOffset }
@@ -304,8 +339,7 @@ fun GraphScreen(
         }
 
         // Selected Node RAG Citation Sheet
-        val selectedEntity = state.selectedEntity
-        if (selectedEntity != null) {
+        entityCitation?.let { citation ->
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(16.dp),
@@ -323,18 +357,18 @@ fun GraphScreen(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(
-                            text = "实体溯源 · $selectedEntity (${state.relatedMemories.size} 条关联)",
+                            text = "实体溯源 · ${citation.entityName} (${citation.relatedMemories.size} 条关联)",
                             style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.SemiBold,
                         )
                         IconButton(
-                            onClick = viewModel::clearSelectedEntity,
+                            onClick = { onIntent(GraphIntent.ClearSelectedEntity) },
                             modifier = Modifier.size(28.dp),
                         ) {
                             Icon(Icons.Rounded.Close, contentDescription = "关闭")
                         }
                     }
-                    state.relatedMemories.take(2).forEach { item ->
+                    citation.relatedMemories.take(2).forEach { item ->
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()

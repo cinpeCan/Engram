@@ -1,7 +1,9 @@
 package io.github.cinpecan.engram.domain.model
 
+import androidx.compose.runtime.Immutable
 import kotlinx.serialization.Serializable
 
+@Immutable
 @Serializable
 data class CalendarProposal(
     val title: String,
@@ -10,6 +12,7 @@ data class CalendarProposal(
     val location: String? = null,
 )
 
+@Immutable
 @Serializable
 data class RelationTriple(
     val id: String = "",
@@ -20,6 +23,7 @@ data class RelationTriple(
     val bidirectional: Boolean = false,
 )
 
+@Immutable
 @Serializable
 data class MemoryAnalysisPayload(
     val summary: String,
@@ -33,6 +37,7 @@ enum class MemoryAnalysisStatus {
     READY,
 }
 
+@Immutable
 data class MemoryItem(
     val id: String,
     val content: String,

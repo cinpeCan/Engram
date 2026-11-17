@@ -30,10 +30,10 @@ data class EnginePreferences(
 /**
  * Stores lightweight runtime configuration switches in DataStore Preferences (never memory payloads).
  */
-class EnginePreferencesRepository(
-    context: Context,
+class EnginePreferencesRepository internal constructor(
+    private val dataStore: DataStore<Preferences>,
 ) {
-    private val dataStore = context.applicationContext.enginePrefsDataStore
+    constructor(context: Context) : this(context.applicationContext.enginePrefsDataStore)
 
     val preferencesFlow: Flow<EnginePreferences> = dataStore.data.map { prefs ->
         val modeName = prefs[KEY_INFERENCE_MODE] ?: InferenceMode.OFFLINE_EDGE.name

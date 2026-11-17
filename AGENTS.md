@@ -28,7 +28,7 @@ engram/
 ## 2. WHY — Core Architectural Principles
 
 1. **White-Box Memory (Transparent & Verifiable)**:
-   - Every captured memory is persisted locally in SQLite (`WAL` + `FTS4` + L2-normalized embedding `BLOB` + directed relation triples) as the Single Source of Truth (SSOT).
+   - Every captured memory is persisted locally in Jetpack Room (`WAL` + `@Fts4` + `@Relation` + L2-normalized embedding `BLOB` + directed relation triples) as the Single Source of Truth (SSOT), exposed via lazy cold `Flow`s from `MemoryDao`.
    - AI outputs are structured and inspectable: auto-extracted tags, calendar proposals, 2D relation triples rendered via `Deponder 0.5.0`, and citation-grounded RAG answers.
 2. **Human-in-the-Loop Tool Execution**:
    - On-device action proposals (such as inserting a system calendar event via `CalendarContract`) MUST surface an explicit confirmation card in UI before invoking system intents. Never mutate user calendar or external state silently.
@@ -42,8 +42,8 @@ engram/
 ## 3. HOW — Hard Engineering Rules & Verification
 
 ### A. Android Client (`:app`)
-- **Stack**: Kotlin, Jetpack Compose (Material 3), Navigation 3 (`SnapshotStateList` user-owned back stack), `ViewModel` + `StateFlow` (MVI), SQLite (`WAL` + `FTS4`), DataStore Preferences (config only), OkHttp + Retrofit + Kotlinx Serialization, `io.github.cinpecan:deponder-compose:0.5.0`.
-- **No Blocking I/O on Main**: All SQLite queries, embedding math, file streaming (`RandomAccessFile`), and network calls execute on `Dispatchers.IO` or `Dispatchers.Default`.
+- **Stack**: Kotlin, Jetpack Compose (Material 3), Navigation 3 (`SnapshotStateList` user-owned back stack, `rememberViewModelStoreNavEntryDecorator()`, Material 3 Adaptive `ListDetailSceneStrategy`), Koin 4.2 (`koin-compose-navigation3` `navigation<T>` + `koinEntryProvider()`), Fine-Grained Stream MVI (`sealed interface` Intent + `Channel` Effect + `combine` / `flatMapLatest` + `SharingStarted.WhileSubscribed(5_000L)`), Jetpack Room (`WAL` + `@Fts4` + `@Relation` cold `Flow`), DataStore Preferences (config only), OkHttp + Retrofit + Kotlinx Serialization, `io.github.cinpecan:deponder-compose:0.5.0`.
+- **No Blocking I/O on Main**: All Room queries, embedding math, file streaming (`RandomAccessFile`), and network calls execute on `Dispatchers.IO` or `Dispatchers.Default`.
 - **Deponder Graph Invariants**: Nodes passed to `DeponderDefaultRubber` / `Modifier.deponderPlanet` under a `deponderRoot` MUST have unique IDs, zero self-loops (`source != target`), and merged bidirectional edges (undirected key `(min(a,b), max(a,b))`).
 
 ### B. On-Device Runtime (`:packages:edge-mnn`)

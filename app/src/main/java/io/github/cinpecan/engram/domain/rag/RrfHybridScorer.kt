@@ -1,7 +1,9 @@
 package io.github.cinpecan.engram.domain.rag
 
+import androidx.compose.runtime.Immutable
 import io.github.cinpecan.engram.domain.model.MemoryItem
 
+@Immutable
 data class RagSearchResult(
     val memory: MemoryItem,
     val lexicalRank: Int?,

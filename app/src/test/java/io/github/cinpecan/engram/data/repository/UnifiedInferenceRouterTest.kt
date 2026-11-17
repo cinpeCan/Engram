@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
 import okhttp3.OkHttpClient
@@ -26,17 +27,37 @@ import org.junit.Test
 class UnifiedInferenceRouterTest {
 
     private class FakeLocalStore(initial: List<MemoryItem>) : LocalMemoryStore {
-        private val items = initial.toMutableList()
-        override val memoriesFlow: StateFlow<List<MemoryItem>> = MutableStateFlow(initial)
-        override suspend fun refresh() = Unit
-        override suspend fun insertRawMemory(item: MemoryItem) { items.add(0, item) }
-        override suspend fun updateMemoryAnalysis(memoryId: String, payload: MemoryAnalysisPayload, embedding: FloatArray?) = Unit
+        private val items = MutableStateFlow(initial)
+
+        override fun observeMemories(): Flow<List<MemoryItem>> = items
+
+        override fun observeMemoryById(memoryId: String): Flow<MemoryItem?> =
+            items.map { list -> list.firstOrNull { it.id == memoryId } }
+
+        override fun observeMemoriesForEntity(entityName: String): Flow<List<MemoryItem>> =
+            items.map { list ->
+                list.filter { item ->
+                    item.content.contains(entityName, ignoreCase = true) ||
+                        item.relations.any { it.source == entityName || it.target == entityName }
+                }
+            }
+
+        override suspend fun insertRawMemory(item: MemoryItem) {
+            items.value = listOf(item) + items.value
+        }
+
+        override suspend fun updateMemoryAnalysis(
+            memoryId: String,
+            payload: MemoryAnalysisPayload,
+            embedding: FloatArray?,
+        ) = Unit
+
         override suspend fun markCalendarSaved(memoryId: String) = Unit
-        override suspend fun getAllMemories(): List<MemoryItem> = items.toList()
-        override suspend fun queryFtsLexicalIds(query: String): List<String> = items.map { it.id }
+        override suspend fun getAllMemories(): List<MemoryItem> = items.value
+        override suspend fun queryFtsLexicalIds(query: String): List<String> = items.value.map { it.id }
         override suspend fun loadAllEmbeddings(): Map<String, FloatArray> =
-            items.associate { it.id to FloatArray(16) { idx -> if (idx == 0) 1f else 0f } }
-        override suspend fun countMemories(): Int = items.size
+            items.value.associate { it.id to FloatArray(16) { idx -> if (idx == 0) 1f else 0f } }
+        override suspend fun countMemories(): Int = items.value.size
     }
 
     private class FakeEdgeEngine : EdgeAiEngine {

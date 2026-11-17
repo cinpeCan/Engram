@@ -2,7 +2,6 @@ package io.github.cinpecan.engram.ui.viewmodel
 
 import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
-import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import io.github.cinpecan.engram.data.preferences.EnginePreferencesRepository
 import io.github.cinpecan.engram.data.repository.AskStreamEvent
@@ -15,11 +14,19 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+
+sealed interface AskIntent {
+    data class SelectMode(val mode: InferenceMode) : AskIntent
+    data class UpdateQuery(val query: String) : AskIntent
+    data class SubmitQuery(val overrideQuery: String? = null) : AskIntent
+}
 
 @Immutable
 data class AskConversationTurn(
@@ -31,70 +38,59 @@ data class AskConversationTurn(
     val telemetry: InferenceTelemetry? = null,
 )
 
-@Immutable
-data class AskUiState(
-    val mode: InferenceMode = InferenceMode.OFFLINE_EDGE,
-    val serverBaseUrl: String = "",
-    val queryInput: String = "",
-    val turns: List<AskConversationTurn> = emptyList(),
-    val isAsking: Boolean = false,
-)
-
 class AskViewModel(
     private val inferenceRouter: UnifiedInferenceRouter,
     private val preferencesRepository: EnginePreferencesRepository,
 ) : ViewModel() {
 
-    private val queryInputFlow = MutableStateFlow("")
-    private val turnsFlow = MutableStateFlow<List<AskConversationTurn>>(emptyList())
-    private val isAskingFlow = MutableStateFlow(false)
+    val inferenceMode: StateFlow<InferenceMode> = preferencesRepository.preferencesFlow
+        .map { it.inferenceMode }
+        .distinctUntilChanged()
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000L),
+            initialValue = InferenceMode.OFFLINE_EDGE,
+        )
+
+    private val _turns = MutableStateFlow<List<AskConversationTurn>>(emptyList())
+    val turns: StateFlow<List<AskConversationTurn>> = _turns.asStateFlow()
+
+    private val _queryInput = MutableStateFlow("")
+    val queryInput: StateFlow<String> = _queryInput.asStateFlow()
+
+    private val _isAsking = MutableStateFlow(false)
+    val isAsking: StateFlow<Boolean> = _isAsking.asStateFlow()
+
     private var activeAskJob: Job? = null
 
-    val uiState: StateFlow<AskUiState> = combine(
-        preferencesRepository.preferencesFlow,
-        queryInputFlow,
-        turnsFlow,
-        isAskingFlow,
-    ) { prefs, input, turns, asking ->
-        AskUiState(
-            mode = prefs.inferenceMode,
-            serverBaseUrl = prefs.serverBaseUrl,
-            queryInput = input,
-            turns = turns,
-            isAsking = asking,
-        )
-    }.stateIn(
-        scope = viewModelScope,
-        started = SharingStarted.WhileSubscribed(5_000L),
-        initialValue = AskUiState(),
-    )
-
-    fun setMode(mode: InferenceMode) {
-        viewModelScope.launch {
-            preferencesRepository.setInferenceMode(mode)
+    fun onIntent(intent: AskIntent) {
+        when (intent) {
+            is AskIntent.SelectMode -> {
+                viewModelScope.launch {
+                    preferencesRepository.setInferenceMode(intent.mode)
+                }
+            }
+            is AskIntent.UpdateQuery -> _queryInput.value = intent.query
+            is AskIntent.SubmitQuery -> submitQuery(intent.overrideQuery)
         }
     }
 
-    fun updateQuery(query: String) {
-        queryInputFlow.value = query
-    }
-
-    fun submitQuery(overrideQuery: String? = null) {
-        val raw = (overrideQuery ?: queryInputFlow.value).trim()
+    private fun submitQuery(overrideQuery: String? = null) {
+        val raw = (overrideQuery ?: _queryInput.value).trim()
         if (raw.isEmpty()) return
 
         activeAskJob?.cancel()
         if (overrideQuery == null) {
-            queryInputFlow.value = ""
+            _queryInput.value = ""
         }
 
         val turnId = UUID.randomUUID().toString().take(8)
-        turnsFlow.update { current ->
+        _turns.update { current ->
             current + AskConversationTurn(id = turnId, query = raw, isStreaming = true)
         }
 
         activeAskJob = viewModelScope.launch {
-            isAskingFlow.value = true
+            _isAsking.value = true
             try {
                 val prefs = preferencesRepository.preferencesFlow.first()
                 inferenceRouter.ask(
@@ -119,7 +115,7 @@ class AskViewModel(
                     }
                 }
             } finally {
-                isAskingFlow.value = false
+                _isAsking.value = false
             }
         }
     }
@@ -128,17 +124,8 @@ class AskViewModel(
         turnId: String,
         transform: (AskConversationTurn) -> AskConversationTurn,
     ) {
-        turnsFlow.update { list ->
+        _turns.update { list ->
             list.map { turn -> if (turn.id == turnId) transform(turn) else turn }
         }
-    }
-
-    class Factory(
-        private val inferenceRouter: UnifiedInferenceRouter,
-        private val preferencesRepository: EnginePreferencesRepository,
-    ) : ViewModelProvider.Factory {
-        @Suppress("UNCHECKED_CAST")
-        override fun <T : ViewModel> create(modelClass: Class<T>): T =
-            AskViewModel(inferenceRouter, preferencesRepository) as T
     }
 }

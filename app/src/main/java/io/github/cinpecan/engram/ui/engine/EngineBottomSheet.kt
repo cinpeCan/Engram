@@ -22,18 +22,17 @@ import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -46,27 +45,54 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.cinpecan.engram.data.remote.ModelDescriptorDto
 import io.github.cinpecan.engram.data.remote.ModelDownloadState
 import io.github.cinpecan.engram.edgemnn.EngineState
+import io.github.cinpecan.engram.ui.viewmodel.EngineEffect
+import io.github.cinpecan.engram.ui.viewmodel.EngineIntent
+import io.github.cinpecan.engram.ui.viewmodel.EngineRuntimeStatus
 import io.github.cinpecan.engram.ui.viewmodel.EngineViewModel
+import io.github.cinpecan.engram.ui.viewmodel.ModelCatalogItemUi
+import java.util.Locale
+import org.koin.compose.viewmodel.koinViewModel
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun EngineBottomSheet(
-    viewModel: EngineViewModel,
-    onDismiss: () -> Unit,
+fun EngineBottomSheetRoute(
+    modifier: Modifier = Modifier,
+    viewModel: EngineViewModel = koinViewModel(),
 ) {
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        EngineBottomSheetContent(viewModel = viewModel)
+    val runtimeStatus by viewModel.runtimeStatus.collectAsStateWithLifecycle()
+    val serverUrlInput by viewModel.serverUrlInput.collectAsStateWithLifecycle()
+    val isRefreshing by viewModel.isRefreshing.collectAsStateWithLifecycle()
+    val catalogItems by viewModel.catalogItems.collectAsStateWithLifecycle()
+    var latestNotice by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(viewModel) {
+        viewModel.effects.collect { effect ->
+            when (effect) {
+                is EngineEffect.ShowMessage -> latestNotice = effect.message
+            }
+        }
     }
+
+    EngineBottomSheetContent(
+        runtimeStatus = runtimeStatus,
+        serverUrlInput = serverUrlInput,
+        isRefreshing = isRefreshing,
+        catalogItems = catalogItems,
+        latestNotice = latestNotice,
+        onIntent = viewModel::onIntent,
+        modifier = modifier,
+    )
 }
 
 @Composable
 fun EngineBottomSheetContent(
-    viewModel: EngineViewModel,
+    runtimeStatus: EngineRuntimeStatus,
+    serverUrlInput: String,
+    isRefreshing: Boolean,
+    catalogItems: List<ModelCatalogItemUi>,
+    latestNotice: String?,
+    onIntent: (EngineIntent) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val state by viewModel.uiState.collectAsStateWithLifecycle()
-    var urlDraft by remember(state.serverBaseUrl) { mutableStateOf(state.serverBaseUrl) }
-
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -75,111 +101,108 @@ fun EngineBottomSheetContent(
             .padding(horizontal = 18.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Icon(Icons.Rounded.Memory, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                Text(
-                    text = "端侧引擎与模型仓",
-                    style = MaterialTheme.typography.titleLarge,
-                )
-            }
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Icon(Icons.Rounded.Memory, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+            Text(
+                text = "端侧引擎与模型仓",
+                style = MaterialTheme.typography.titleLarge,
+            )
+        }
 
-            // Native Memory Lifecycle Card
-            Card(
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
-                ),
+        // Native Memory Lifecycle Card
+        Card(
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+            ),
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(14.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
+                    Text(
+                        text = "状态：${describeEngineState(runtimeStatus.engineState)}",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        text = String.format(Locale.US, "Native Heap: %.1f MB", runtimeStatus.nativeHeapMb),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+
+                latestNotice?.let { notice ->
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.secondaryContainer,
                     ) {
                         Text(
-                            text = "状态：${describeEngineState(state.engineState)}",
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.SemiBold,
+                            text = notice,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
                         )
-                        Text(
-                            text = String.format("Native Heap: %.1f MB", state.nativeHeapMb),
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.primary,
-                        )
-                    }
-
-                    state.statusNotice?.let { notice ->
-                        Surface(
-                            shape = RoundedCornerShape(8.dp),
-                            color = MaterialTheme.colorScheme.secondaryContainer,
-                        ) {
-                            Text(
-                                text = notice,
-                                style = MaterialTheme.typography.bodySmall,
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                            )
-                        }
-                    }
-
-                    FilledTonalButton(
-                        onClick = viewModel::releaseMemoryNow,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.CleaningServices,
-                            contentDescription = null,
-                            modifier = Modifier.size(16.dp),
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("立即释放引擎内存 (Unload Session)")
                     }
                 }
-            }
 
-            // Same-repo Gateway Manifest Sync
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                OutlinedTextField(
-                    value = urlDraft,
-                    onValueChange = { urlDraft = it },
-                    label = { Text("同仓 FastAPI 网关地址") },
-                    singleLine = true,
-                    modifier = Modifier.weight(1f),
-                )
-                IconButton(
-                    onClick = {
-                        viewModel.updateServerUrl(urlDraft)
-                        viewModel.refreshCatalog(urlDraft)
-                    },
-                    enabled = !state.isRefreshingCatalog,
+                FilledTonalButton(
+                    onClick = { onIntent(EngineIntent.ReleaseMemoryNow) },
+                    modifier = Modifier.fillMaxWidth(),
                 ) {
-                    Icon(Icons.Rounded.Refresh, contentDescription = "同步模型清单")
+                    Icon(
+                        imageVector = Icons.Rounded.CleaningServices,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("立即释放引擎内存 (Unload Session)")
                 }
             }
+        }
 
-            // Model List
-            state.catalog.forEach { model ->
-                ModelCatalogRow(
-                    model = model,
-                    downloadState = state.downloadStates[model.id] ?: ModelDownloadState.Idle,
-                    isSelected = state.selectedModelId == model.id,
-                    onToggleDownload = { viewModel.toggleDownload(model) },
-                    onLoad = { viewModel.loadModel(model) },
-                )
+        // Same-repo Gateway Manifest Sync
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            OutlinedTextField(
+                value = serverUrlInput,
+                onValueChange = { onIntent(EngineIntent.UpdateServerUrlInput(it)) },
+                label = { Text("同仓 FastAPI 网关地址") },
+                singleLine = true,
+                modifier = Modifier.weight(1f),
+            )
+            IconButton(
+                onClick = { onIntent(EngineIntent.SyncCatalog) },
+                enabled = !isRefreshing,
+            ) {
+                Icon(Icons.Rounded.Refresh, contentDescription = "同步模型清单")
             }
+        }
 
-            Spacer(modifier = Modifier.size(18.dp))
+        // Model List
+        catalogItems.forEach { item ->
+            ModelCatalogRow(
+                model = item.model,
+                downloadState = item.downloadState,
+                isSelected = item.isSelected,
+                onToggleDownload = { onIntent(EngineIntent.ToggleDownload(item.model)) },
+                onLoad = { onIntent(EngineIntent.LoadModel(item.model)) },
+            )
+        }
+
+        Spacer(modifier = Modifier.size(18.dp))
     }
 }
 
