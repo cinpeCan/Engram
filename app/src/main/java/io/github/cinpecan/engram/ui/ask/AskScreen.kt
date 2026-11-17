@@ -2,18 +2,16 @@ package io.github.cinpecan.engram.ui.ask
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -35,28 +33,36 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.cinpecan.engram.domain.model.InferenceMode
+import io.github.cinpecan.engram.ui.components.CollapsibleBottomConsoleLayout
 import io.github.cinpecan.engram.ui.viewmodel.AskConversationTurn
 import io.github.cinpecan.engram.ui.viewmodel.AskViewModel
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun AskScreen(
     viewModel: AskViewModel,
     modifier: Modifier = Modifier,
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val focusManager = LocalFocusManager.current
+    var isInputFocused by remember { mutableStateOf(false) }
+
+    val isQueryEmpty = state.queryInput.isEmpty()
+    val lockConsoleExpanded = state.queryInput.isNotBlank() || state.isAsking
 
     Column(
-        modifier = modifier
-            .fillMaxSize()
-            .imePadding(),
+        modifier = modifier.fillMaxSize(),
     ) {
         // Offline Edge vs Cloud Collaboration Switch
         Surface(
@@ -98,78 +104,110 @@ fun AskScreen(
                     }
                 }
 
-                FlowRow(
+                LazyRow(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    SUGGESTED_QUERIES.forEach { suggestion ->
+                    items(SUGGESTED_QUERIES) { suggestion ->
                         AssistChip(
                             onClick = { viewModel.submitQuery(suggestion) },
-                            label = { Text(suggestion, maxLines = 1) },
+                            label = {
+                                Text(
+                                    text = suggestion,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            },
                         )
                     }
                 }
             }
         }
 
-        LazyColumn(
+        CollapsibleBottomConsoleLayout(
+            lockExpanded = lockConsoleExpanded,
+            onUserScroll = {
+                if (isInputFocused && state.queryInput.isBlank()) {
+                    focusManager.clearFocus()
+                }
+            },
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth(),
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
-        ) {
-            if (state.turns.isEmpty()) {
-                item {
-                    Card(
-                        shape = RoundedCornerShape(16.dp),
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-                        ),
-                    ) {
-                        Text(
-                            text = "在上方点击示例问题或输入任何追问。系统先执行本地「CJK 双字全文 + 向量 RRF」混合召回并明文展示引用来源，再在本地 MNN 或同仓 SSE 网关流式作答。",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(16.dp),
-                        )
+            listContent = { bottomContentPadding ->
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(
+                        start = 16.dp,
+                        top = 16.dp,
+                        end = 16.dp,
+                        bottom = bottomContentPadding,
+                    ),
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                ) {
+                    if (state.turns.isEmpty()) {
+                        item {
+                            Card(
+                                shape = RoundedCornerShape(16.dp),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                                ),
+                            ) {
+                                Text(
+                                    text = "在上方点击示例问题或输入任何追问。系统先执行本地「CJK 双字全文 + 向量 RRF」混合召回并明文展示引用来源，再在本地 MNN 或同仓 SSE 网关流式作答。",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(16.dp),
+                                )
+                            }
+                        }
+                    }
+
+                    items(state.turns, key = { it.id }) { turn ->
+                        AskTurnView(turn = turn)
                     }
                 }
-            }
-
-            items(state.turns, key = { it.id }) { turn ->
-                AskTurnView(turn = turn)
-            }
-        }
-
-        Surface(
-            tonalElevation = 3.dp,
-            shadowElevation = 6.dp,
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 14.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.Bottom,
-            ) {
-                OutlinedTextField(
-                    value = state.queryInput,
-                    onValueChange = viewModel::updateQuery,
-                    modifier = Modifier.weight(1f),
-                    placeholder = { Text("用自然语言向本地记忆库提问…") },
-                    maxLines = 3,
-                    shape = RoundedCornerShape(16.dp),
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                FilledIconButton(
-                    onClick = { viewModel.submitQuery() },
-                    enabled = state.queryInput.isNotBlank() && !state.isAsking,
-                    modifier = Modifier.size(48.dp),
+            },
+            consoleContent = {
+                Surface(
+                    tonalElevation = 3.dp,
+                    shadowElevation = 8.dp,
+                    shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
                 ) {
-                    Icon(Icons.AutoMirrored.Rounded.Send, contentDescription = "提问")
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = if (isQueryEmpty) Alignment.CenterVertically else Alignment.Bottom,
+                    ) {
+                        OutlinedTextField(
+                            value = state.queryInput,
+                            onValueChange = viewModel::updateQuery,
+                            modifier = Modifier
+                                .weight(1f)
+                                .onFocusChanged { isInputFocused = it.isFocused },
+                            placeholder = {
+                                Text(
+                                    text = "向本地记忆库提问…",
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            },
+                            minLines = 1,
+                            maxLines = if (isQueryEmpty) 1 else 4,
+                            shape = RoundedCornerShape(24.dp),
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        FilledIconButton(
+                            onClick = { viewModel.submitQuery() },
+                            enabled = state.queryInput.isNotBlank() && !state.isAsking,
+                            modifier = Modifier.size(48.dp),
+                        ) {
+                            Icon(Icons.AutoMirrored.Rounded.Send, contentDescription = "提问")
+                        }
+                    }
                 }
-            }
-        }
+            },
+        )
     }
 }
 

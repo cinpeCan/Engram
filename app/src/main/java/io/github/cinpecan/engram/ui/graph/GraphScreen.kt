@@ -36,8 +36,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -76,12 +78,7 @@ fun GraphScreen(
 
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val deponderState = rememberDeponderState(
-        physics = RootPhysics.fromPreset(DeponderDefaults.Presets.Crisp).copy(
-            airDamping = 2.85f,
-            wallRepulsionDp = 36f,
-            minScale = 0.55f,
-            maxScale = 1.25f,
-        ),
+        physics = buildGraphRootPhysics(widthDp = 360f, heightDp = 520f),
     )
 
     val lineColor = MaterialTheme.colorScheme.outline
@@ -194,18 +191,29 @@ fun GraphScreen(
                         .fillMaxSize()
                         .background(MaterialTheme.colorScheme.surface),
                 ) {
+                    val rootPhysics = remember(maxWidth, maxHeight) {
+                        buildGraphRootPhysics(
+                            widthDp = maxWidth.value,
+                            heightDp = maxHeight.value,
+                        )
+                    }
                     val autoScale = computeAutoGraphScale(
                         widthDp = maxWidth.value,
                         heightDp = maxHeight.value,
                         nodeCount = state.nodes.size,
                     )
-                    LaunchedEffect(autoScale, state.activeMemoryId) {
+                    val seedRadiusDp = (minOf(maxWidth.value, maxHeight.value) * 0.21f)
+                        .coerceIn(60f, 88f)
+                        .dp
+                    LaunchedEffect(rootPhysics, autoScale, state.activeMemoryId) {
+                        deponderState.updatePhysics(rootPhysics)
                         deponderState.submitScale(autoScale)
                     }
 
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
+                            .clipToBounds()
                             .deponderRoot(deponderState),
                     ) {
                         state.visibleEdges.forEach { edge ->
@@ -230,7 +238,7 @@ fun GraphScreen(
                                         DeponderArrowMode.END
                                     },
                                     physics = RubberPhysics(
-                                        elasticity = 2.65f,
+                                        elasticity = 5.6f,
                                         naturalLengthDp = naturalLengthDp,
                                     ),
                                     insets = DeponderRubberInsets.Default,
@@ -247,7 +255,7 @@ fun GraphScreen(
                         }
 
                         val nodeCount = state.nodes.size.coerceAtLeast(1)
-                        val seedRadiusPx = with(LocalDensity.current) { 105.dp.toPx() }
+                        val seedRadiusPx = with(LocalDensity.current) { seedRadiusDp.toPx() }
                         state.nodes.forEachIndexed { index, node ->
                             val angle = (2.0 * PI * index) / nodeCount
                             val seedOffset = IntOffset(
@@ -265,8 +273,9 @@ fun GraphScreen(
                                         .deponderPlanet(
                                             id = node.id,
                                             physics = PlanetPhysics(
-                                                repulsionRadiusDp = 190f,
-                                                elasticity = 2.25f,
+                                                mass = 1.65f,
+                                                repulsionRadiusDp = 148f,
+                                                elasticity = 4.2f,
                                                 pinned = false,
                                             ),
                                         )
@@ -324,31 +333,48 @@ fun GraphScreen(
     }
 }
 
-private fun computeAutoGraphScale(
+internal fun buildGraphRootPhysics(
+    widthDp: Float,
+    heightDp: Float,
+): RootPhysics {
+    val wallRepulsionDp = (minOf(widthDp, heightDp) * 0.34f).coerceIn(98f, 136f)
+    return RootPhysics.fromPreset(DeponderDefaults.Presets.Crisp).copy(
+        airDamping = 2.95f,
+        wallRepulsionDp = wallRepulsionDp,
+        wallElasticityStart = 5.8f,
+        wallElasticityTop = 5.2f,
+        wallElasticityEnd = 5.8f,
+        wallElasticityBottom = 5.2f,
+        minScale = 0.55f,
+        maxScale = 1.25f,
+    )
+}
+
+internal fun computeAutoGraphScale(
     widthDp: Float,
     heightDp: Float,
     nodeCount: Int,
 ): Float {
     val baseByCount = when {
-        nodeCount <= 3 -> 0.95f
-        nodeCount <= 5 -> 0.86f
-        nodeCount <= 8 -> 0.78f
-        else -> 0.70f
+        nodeCount <= 3 -> 0.94f
+        nodeCount <= 5 -> 0.84f
+        nodeCount <= 8 -> 0.74f
+        else -> 0.66f
     }
-    val viewportFactor = (minOf(widthDp, heightDp) / 380f).coerceIn(0.85f, 1.12f)
-    return (baseByCount * viewportFactor).coerceIn(0.62f, 1.05f)
+    val viewportFactor = (minOf(widthDp, heightDp) / 360f).coerceIn(0.82f, 1.08f)
+    return (baseByCount * viewportFactor).coerceIn(0.60f, 1.02f)
 }
 
-private fun computeAutoNaturalLengthDp(
+internal fun computeAutoNaturalLengthDp(
     source: String,
     target: String,
     relation: String,
 ): Float {
-    val srcHalfDp = 14f + source.length * 6.5f
-    val tgtHalfDp = 14f + target.length * 6.5f
-    val labelWidthDp = 14f + relation.length * 11.5f
-    val arrowAndBreathingDp = 52f
-    return (srcHalfDp + tgtHalfDp + labelWidthDp + arrowAndBreathingDp).coerceIn(155f, 255f)
+    val srcHalfDp = 12f + source.length * 5.2f
+    val tgtHalfDp = 12f + target.length * 5.2f
+    val labelWidthDp = 12f + relation.length * 10.5f
+    val arrowAndBreathingDp = 36f
+    return (srcHalfDp + tgtHalfDp + labelWidthDp + arrowAndBreathingDp).coerceIn(132f, 188f)
 }
 
 @Composable
