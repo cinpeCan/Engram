@@ -13,8 +13,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.AirplanemodeActive
 import androidx.compose.material.icons.rounded.CleaningServices
 import androidx.compose.material.icons.rounded.CloudDownload
+import androidx.compose.material.icons.rounded.CloudQueue
 import androidx.compose.material.icons.rounded.Memory
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
@@ -29,6 +31,9 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -44,6 +49,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.cinpecan.engram.data.remote.ModelDescriptorDto
 import io.github.cinpecan.engram.data.remote.ModelDownloadState
+import io.github.cinpecan.engram.domain.model.InferenceMode
 import io.github.cinpecan.engram.edgemnn.EngineState
 import io.github.cinpecan.engram.ui.viewmodel.EngineEffect
 import io.github.cinpecan.engram.ui.viewmodel.EngineIntent
@@ -58,6 +64,7 @@ fun EngineBottomSheetRoute(
     modifier: Modifier = Modifier,
     viewModel: EngineViewModel = koinViewModel(),
 ) {
+    val inferenceMode by viewModel.inferenceMode.collectAsStateWithLifecycle()
     val runtimeStatus by viewModel.runtimeStatus.collectAsStateWithLifecycle()
     val serverUrlInput by viewModel.serverUrlInput.collectAsStateWithLifecycle()
     val isRefreshing by viewModel.isRefreshing.collectAsStateWithLifecycle()
@@ -73,6 +80,7 @@ fun EngineBottomSheetRoute(
     }
 
     EngineBottomSheetContent(
+        inferenceMode = inferenceMode,
         runtimeStatus = runtimeStatus,
         serverUrlInput = serverUrlInput,
         isRefreshing = isRefreshing,
@@ -85,6 +93,7 @@ fun EngineBottomSheetRoute(
 
 @Composable
 fun EngineBottomSheetContent(
+    inferenceMode: InferenceMode,
     runtimeStatus: EngineRuntimeStatus,
     serverUrlInput: String,
     isRefreshing: Boolean,
@@ -93,6 +102,9 @@ fun EngineBottomSheetContent(
     onIntent: (EngineIntent) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val canRelease = runtimeStatus.engineState is EngineState.Ready ||
+        runtimeStatus.engineState is EngineState.Generating
+
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -107,12 +119,44 @@ fun EngineBottomSheetContent(
         ) {
             Icon(Icons.Rounded.Memory, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
             Text(
-                text = "端侧引擎与模型仓",
+                text = "端云推理与模型仓",
                 style = MaterialTheme.typography.titleLarge,
             )
         }
 
-        // Native Memory Lifecycle Card
+        // Edge MNN vs Cloud SSE Mode Switch
+        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+            SegmentedButton(
+                selected = inferenceMode == InferenceMode.OFFLINE_EDGE,
+                onClick = { onIntent(EngineIntent.SelectMode(InferenceMode.OFFLINE_EDGE)) },
+                shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+                icon = {
+                    Icon(
+                        imageVector = Icons.Rounded.AirplanemodeActive,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                    )
+                },
+            ) {
+                Text("纯离线 MNN")
+            }
+            SegmentedButton(
+                selected = inferenceMode == InferenceMode.CLOUD_COLLAB,
+                onClick = { onIntent(EngineIntent.SelectMode(InferenceMode.CLOUD_COLLAB)) },
+                shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+                icon = {
+                    Icon(
+                        imageVector = Icons.Rounded.CloudQueue,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                    )
+                },
+            ) {
+                Text("云端协同 SSE")
+            }
+        }
+
+        // Honest Native Memory & Backend Card
         Card(
             shape = RoundedCornerShape(16.dp),
             colors = CardDefaults.cardColors(
@@ -131,14 +175,37 @@ fun EngineBottomSheetContent(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        text = "状态：${describeEngineState(runtimeStatus.engineState)}",
+                        text = "会话：${describeEngineState(runtimeStatus.engineState)}",
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.SemiBold,
                     )
                     Text(
-                        text = String.format(Locale.US, "Native Heap: %.1f MB", runtimeStatus.nativeHeapMb),
+                        text = String.format(Locale.US, "RSS %.1f MB", runtimeStatus.residentMemoryMb),
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+
+                Text(
+                    text = if (runtimeStatus.isBackendAvailable) {
+                        "MNN 原生库：已链接 (arm64-v8a)"
+                    } else {
+                        "MNN 原生库：未内置（未加载前将诚实走本地规则兜底或云端 SSE）"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                val readyState = runtimeStatus.engineState as? EngineState.Ready
+                if (readyState != null && readyState.modelFootprintBytes > 0L) {
+                    Text(
+                        text = String.format(
+                            Locale.US,
+                            "当前模型常驻增量：+%.1f MB",
+                            readyState.modelFootprintBytes / (1024.0 * 1024.0),
+                        ),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.secondary,
                     )
                 }
 
@@ -157,6 +224,7 @@ fun EngineBottomSheetContent(
 
                 FilledTonalButton(
                     onClick = { onIntent(EngineIntent.ReleaseMemoryNow) },
+                    enabled = canRelease,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Icon(
@@ -191,12 +259,13 @@ fun EngineBottomSheetContent(
             }
         }
 
-        // Model List
+        // Single Qwen2.5-0.5B Model Entry
         catalogItems.forEach { item ->
             ModelCatalogRow(
                 model = item.model,
                 downloadState = item.downloadState,
-                isSelected = item.isSelected,
+                isBackendAvailable = runtimeStatus.isBackendAvailable,
+                isLoaded = (runtimeStatus.engineState as? EngineState.Ready)?.modelId == item.model.id,
                 onToggleDownload = { onIntent(EngineIntent.ToggleDownload(item.model)) },
                 onLoad = { onIntent(EngineIntent.LoadModel(item.model)) },
             )
@@ -210,12 +279,15 @@ fun EngineBottomSheetContent(
 private fun ModelCatalogRow(
     model: ModelDescriptorDto,
     downloadState: ModelDownloadState,
-    isSelected: Boolean,
+    isBackendAvailable: Boolean,
+    isLoaded: Boolean,
     onToggleDownload: () -> Unit,
     onLoad: () -> Unit,
 ) {
+    val canLoad = downloadState is ModelDownloadState.Completed && isBackendAvailable
+
     Card(
-        shape = RoundedCornerShape(14.dp),
+        shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
     ) {
@@ -225,24 +297,18 @@ private fun ModelCatalogRow(
                 .padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = model.name,
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    val mb = model.sizeBytes / (1024 * 1024)
-                    Text(
-                        text = "${model.role} · ${model.quantization} · ${mb}MB · 需 ${model.minRamMb}MB RAM",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
+            Column {
+                Text(
+                    text = model.name,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                val mb = model.sizeBytes / (1024 * 1024)
+                Text(
+                    text = "${model.quantization} · ${mb}MB · 需 ${model.minRamMb}MB RAM",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
 
             model.description?.let {
@@ -286,7 +352,7 @@ private fun ModelCatalogRow(
                     val label = when (downloadState) {
                         is ModelDownloadState.Downloading -> "暂停下载"
                         is ModelDownloadState.Paused -> "断点续传"
-                        is ModelDownloadState.Completed -> "已就绪"
+                        is ModelDownloadState.Completed -> "权重已就绪"
                         else -> "分片下载"
                     }
                     Icon(icon, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -294,20 +360,19 @@ private fun ModelCatalogRow(
                     Text(label)
                 }
 
-                if (model.role == "embedding") {
-                    OutlinedButton(
-                        onClick = onLoad,
-                        modifier = Modifier.weight(1f),
-                    ) {
-                        Text("向量组件")
-                    }
-                } else {
-                    Button(
-                        onClick = onLoad,
-                        modifier = Modifier.weight(1f),
-                    ) {
-                        Text(if (isSelected) "激活 / 重载" else "加载模型")
-                    }
+                Button(
+                    onClick = onLoad,
+                    enabled = canLoad,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text(
+                        when {
+                            isLoaded -> "重载权重"
+                            !isBackendAvailable -> "需内置 .so"
+                            downloadState !is ModelDownloadState.Completed -> "待下载"
+                            else -> "加载模型"
+                        },
+                    )
                 }
             }
         }
@@ -320,5 +385,5 @@ private fun describeEngineState(state: EngineState): String = when (state) {
     is EngineState.Ready -> "${state.backendName} 就绪"
     is EngineState.Generating -> "流式生成中 (${state.backendName})"
     is EngineState.Releasing -> "释放中 (${state.reason.name})"
-    is EngineState.Error -> "错误：${state.message}"
+    is EngineState.Error -> "不可用：${state.message}"
 }

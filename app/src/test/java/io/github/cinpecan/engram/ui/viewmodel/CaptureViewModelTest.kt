@@ -1,8 +1,11 @@
 package io.github.cinpecan.engram.ui.viewmodel
 
 import io.github.cinpecan.engram.data.local.LocalMemoryStore
+import io.github.cinpecan.engram.data.remote.CloudSseClient
 import io.github.cinpecan.engram.data.repository.MemoryRepository
+import io.github.cinpecan.engram.data.repository.UnifiedInferenceRouter
 import io.github.cinpecan.engram.domain.analyzer.MemoryAnalyzer
+import io.github.cinpecan.engram.domain.model.AnalysisSource
 import io.github.cinpecan.engram.domain.model.CalendarProposal
 import io.github.cinpecan.engram.domain.model.MemoryAnalysisPayload
 import io.github.cinpecan.engram.domain.model.MemoryAnalysisStatus
@@ -23,6 +26,8 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeout
+import okhttp3.OkHttpClient
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -52,7 +57,8 @@ class CaptureViewModelTest {
         override suspend fun updateMemoryAnalysis(
             memoryId: String,
             payload: MemoryAnalysisPayload,
-            embedding: FloatArray?,
+            analysisSource: AnalysisSource,
+            telemetryBadge: String,
         ) {
             items.value = items.value.map { item ->
                 if (item.id == memoryId) {
@@ -62,6 +68,8 @@ class CaptureViewModelTest {
                         analysisStatus = MemoryAnalysisStatus.READY,
                         calendarProposal = payload.calendarProposal,
                         relations = payload.relations,
+                        analysisSource = analysisSource,
+                        telemetryBadge = telemetryBadge,
                     )
                 } else {
                     item
@@ -77,35 +85,33 @@ class CaptureViewModelTest {
         }
 
         override suspend fun getAllMemories(): List<MemoryItem> = items.value
-        override suspend fun queryFtsLexicalIds(query: String): List<String> = emptyList()
-        override suspend fun loadAllEmbeddings(): Map<String, FloatArray> = emptyMap()
         override suspend fun countMemories(): Int = items.value.size
     }
 
     private class StubEngine : EdgeAiEngine {
         override val state: StateFlow<EngineState> = MutableStateFlow(EngineState.Unloaded)
         override val lastTelemetry: StateFlow<InferenceTelemetry?> = MutableStateFlow(null)
-        override suspend fun loadModel(modelId: String, modelDirPath: String) = Result.success(Unit)
-        override fun streamGenerate(prompt: String, maxTokens: Int): Flow<StreamChunk> = flow {
-            emit(
-                StreamChunk.Completed(
-                    fullText = "",
-                    telemetry = InferenceTelemetry("stub", "stub", 1, 1, 0, 0.0, 0.0, false),
-                ),
-            )
-        }
-        override suspend fun embedText(text: String, dims: Int) = FloatArray(dims)
+        override val isBackendAvailable: Boolean = false
+        override suspend fun loadModel(modelId: String, modelDirPath: String) =
+            Result.failure<Unit>(IllegalStateException("unavailable"))
+        override fun streamGenerate(prompt: String, maxTokens: Int): Flow<StreamChunk> = flow {}
         override suspend fun unload(reason: UnloadReason): Long = 0L
         override fun cancelActiveGeneration() = Unit
         override fun onTrimMemory(level: Int) = Unit
-        override fun currentNativeHeapBytes(): Long = 0L
+        override fun currentMemoryBytes(): Long = 0L
     }
+
+    private fun buildRouter(engine: EdgeAiEngine = StubEngine()): UnifiedInferenceRouter =
+        UnifiedInferenceRouter(
+            edgeEngine = engine,
+            cloudSseClient = CloudSseClient(OkHttpClient()),
+            analyzer = MemoryAnalyzer(),
+        )
 
     @Test
     fun updateInputAndFillSampleUpdateInputTextSynchronously() {
         val store = FakeStore()
-        val engine = StubEngine()
-        val repo = MemoryRepository(store, engine, MemoryAnalyzer(engine))
+        val repo = MemoryRepository(store, buildRouter())
         val vm = CaptureViewModel(repo)
 
         vm.onIntent(CaptureIntent.UpdateInput("测试草稿"))
@@ -116,13 +122,11 @@ class CaptureViewModelTest {
     }
 
     @Test
-    fun submitCapturePersistsMemoryAndClearsInput() = runTest {
+    fun submitCapturePersistsMemoryClearsInputAndCleansStreamingPreview() = runTest {
         val store = FakeStore()
-        val engine = StubEngine()
         val repo = MemoryRepository(
             store = store,
-            engine = engine,
-            analyzer = MemoryAnalyzer(engine),
+            inferenceRouter = buildRouter(),
             backgroundScope = backgroundScope,
         )
         val vm = CaptureViewModel(repo)
@@ -134,9 +138,21 @@ class CaptureViewModelTest {
         vm.onIntent(CaptureIntent.UpdateInput("和陈工确认柔性屏采购交期"))
         vm.onIntent(CaptureIntent.SubmitCapture)
 
+        val readyList = withTimeout(5_000L) {
+            vm.memories.first { list ->
+                list.any {
+                    it.content == "和陈工确认柔性屏采购交期" &&
+                        it.analysisStatus == MemoryAnalysisStatus.READY
+                }
+            }
+        }
+
         assertEquals("", vm.inputText.value)
         assertFalse(vm.isSubmitting.value)
-        assertTrue(vm.memories.value.any { it.content == "和陈工确认柔性屏采购交期" })
+        val saved = readyList.first { it.content == "和陈工确认柔性屏采购交期" }
+        assertEquals(MemoryAnalysisStatus.READY, saved.analysisStatus)
+        assertEquals(AnalysisSource.LOCAL_RULE_FALLBACK, saved.analysisSource)
+        assertTrue(vm.streamingPreviews.value.isEmpty())
     }
 
     @Test
@@ -159,8 +175,7 @@ class CaptureViewModelTest {
             relations = emptyList(),
         )
         val store = FakeStore(listOf(seed))
-        val engine = StubEngine()
-        val repo = MemoryRepository(store, engine, MemoryAnalyzer(engine), backgroundScope = backgroundScope)
+        val repo = MemoryRepository(store, buildRouter(), backgroundScope = backgroundScope)
         val vm = CaptureViewModel(repo)
 
         backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {

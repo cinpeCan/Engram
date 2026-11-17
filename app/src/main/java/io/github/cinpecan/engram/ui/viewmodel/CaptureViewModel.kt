@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import io.github.cinpecan.engram.data.repository.MemoryRepository
 import io.github.cinpecan.engram.domain.model.CalendarProposal
 import io.github.cinpecan.engram.domain.model.MemoryItem
+import io.github.cinpecan.engram.domain.model.StreamingPreviewState
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -42,6 +43,9 @@ class CaptureViewModel(
             started = SharingStarted.WhileSubscribed(5_000L),
             initialValue = emptyList(),
         )
+
+    val streamingPreviews: StateFlow<Map<String, StreamingPreviewState>> =
+        memoryRepository.streamingPreviews
 
     private val _inputText = MutableStateFlow("")
     val inputText: StateFlow<String> = _inputText.asStateFlow()

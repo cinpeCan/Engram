@@ -42,7 +42,7 @@ class CloudSseClient(
             while (currentCoroutineContext().isActive && !source.exhausted()) {
                 val line = source.readUtf8Line() ?: break
                 if (line.isBlank() || !line.startsWith("data:")) continue
-                val raw = line.removePrefix("data:").strip()
+                val raw = line.removePrefix("data:").trim()
                 if (raw == "[DONE]") {
                     sawDoneMarker = true
                     break

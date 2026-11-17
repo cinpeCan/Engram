@@ -1,9 +1,15 @@
 package io.github.cinpecan.engram.ui.capture
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
-import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -15,6 +21,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -22,13 +29,14 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Send
-import androidx.compose.material.icons.automirrored.rounded.Subject
 import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.Hub
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.CalendarMonth
+import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Hub
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
@@ -36,7 +44,9 @@ import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilledIconButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -53,17 +63,21 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.cinpecan.engram.domain.agent.CalendarToolExecutor
+import io.github.cinpecan.engram.domain.model.AnalysisSource
 import io.github.cinpecan.engram.domain.model.CalendarProposal
 import io.github.cinpecan.engram.domain.model.MemoryAnalysisStatus
 import io.github.cinpecan.engram.domain.model.MemoryItem
+import io.github.cinpecan.engram.domain.model.StreamingPreviewState
 import io.github.cinpecan.engram.ui.components.CollapsibleBottomConsoleLayout
-import io.github.cinpecan.engram.ui.navigation.EngramNavKey
 import io.github.cinpecan.engram.ui.navigation.EngramNavigator
 import io.github.cinpecan.engram.ui.navigation.LocalEngramNavigator
 import io.github.cinpecan.engram.ui.viewmodel.CaptureEffect
@@ -81,6 +95,7 @@ fun CaptureRoute(
     navigator: EngramNavigator = LocalEngramNavigator.current,
 ) {
     val memories by viewModel.memories.collectAsStateWithLifecycle()
+    val streamingPreviews by viewModel.streamingPreviews.collectAsStateWithLifecycle()
     val inputText by viewModel.inputText.collectAsStateWithLifecycle()
     val isSubmitting by viewModel.isSubmitting.collectAsStateWithLifecycle()
     val context = LocalContext.current
@@ -105,24 +120,29 @@ fun CaptureRoute(
 
     CaptureScreen(
         memories = memories,
+        streamingPreviews = streamingPreviews,
         inputText = inputText,
         isSubmitting = isSubmitting,
         onIntent = viewModel::onIntent,
         onOpenGraph = navigator::openGraphForMemory,
-        onOpenRawMemory = { id -> navigator.openOverlay(EngramNavKey.RawMemory(id)) },
+        onCopyRaw = { rawText ->
+            val clipboard = context.getSystemService(ClipboardManager::class.java)
+            clipboard?.setPrimaryClip(ClipData.newPlainText("engram_raw", rawText))
+            navigator.showMessage("已复制原文到剪贴板")
+        },
         modifier = modifier,
     )
 }
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun CaptureScreen(
     memories: List<MemoryItem>,
+    streamingPreviews: Map<String, StreamingPreviewState>,
     inputText: String,
     isSubmitting: Boolean,
     onIntent: (CaptureIntent) -> Unit,
     onOpenGraph: (String) -> Unit,
-    onOpenRawMemory: (String) -> Unit,
+    onCopyRaw: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val focusManager = LocalFocusManager.current
@@ -130,6 +150,11 @@ fun CaptureScreen(
 
     val isInputEmpty = inputText.isEmpty()
     val lockConsoleExpanded = inputText.isNotBlank() || isSubmitting
+    val fieldCornerRadius by animateDpAsState(
+        targetValue = if (isInputEmpty) 28.dp else 20.dp,
+        animationSpec = spring(dampingRatio = 0.8f, stiffness = 380f),
+        label = "inputFieldCorner",
+    )
 
     CollapsibleBottomConsoleLayout(
         lockExpanded = lockConsoleExpanded,
@@ -153,8 +178,9 @@ fun CaptureScreen(
                 items(memories, key = { it.id }) { memory ->
                     MemoryTimelineCard(
                         memory = memory,
+                        streamingPreview = streamingPreviews[memory.id],
                         onOpenGraph = { onOpenGraph(memory.id) },
-                        onOpenRawMemory = { onOpenRawMemory(memory.id) },
+                        onCopyRaw = { onCopyRaw(memory.content) },
                         onAddCalendar = { proposal ->
                             onIntent(
                                 CaptureIntent.RequestAddCalendar(
@@ -171,12 +197,13 @@ fun CaptureScreen(
             Surface(
                 tonalElevation = 3.dp,
                 shadowElevation = 8.dp,
-                shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
+                shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
             ) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                        .navigationBarsPadding()
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
                     AnimatedVisibility(visible = isInputEmpty) {
@@ -243,7 +270,7 @@ fun CaptureScreen(
                             },
                             minLines = 1,
                             maxLines = if (isInputEmpty) 1 else 4,
-                            shape = RoundedCornerShape(24.dp),
+                            shape = RoundedCornerShape(fieldCornerRadius),
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         FilledIconButton(
@@ -267,16 +294,26 @@ fun CaptureScreen(
 @Composable
 private fun MemoryTimelineCard(
     memory: MemoryItem,
+    streamingPreview: StreamingPreviewState?,
     onOpenGraph: () -> Unit,
-    onOpenRawMemory: () -> Unit,
+    onCopyRaw: () -> Unit,
     onAddCalendar: (CalendarProposal) -> Unit,
 ) {
     var expanded by rememberSaveable(memory.id) { mutableStateOf(false) }
+    var wasPending by remember(memory.id) { mutableStateOf(memory.analysisStatus == MemoryAnalysisStatus.PENDING) }
+    val haptic = LocalHapticFeedback.current
+
+    LaunchedEffect(memory.analysisStatus) {
+        if (wasPending && memory.analysisStatus == MemoryAnalysisStatus.READY) {
+            wasPending = false
+            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+        }
+    }
 
     Card(
         onClick = { expanded = !expanded },
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(20.dp),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surface,
         ),
@@ -287,11 +324,11 @@ private fun MemoryTimelineCard(
                 .fillMaxWidth()
                 .animateContentSize(
                     animationSpec = spring(
-                        dampingRatio = Spring.DampingRatioNoBouncy,
-                        stiffness = Spring.StiffnessMediumLow,
+                        dampingRatio = 0.8f,
+                        stiffness = 380f,
                     ),
                 )
-                .padding(horizontal = 15.dp, vertical = 12.dp),
+                .padding(horizontal = 14.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             // Compact metadata header
@@ -328,12 +365,12 @@ private fun MemoryTimelineCard(
                     if (memory.analysisStatus == MemoryAnalysisStatus.PENDING) {
                         Surface(
                             shape = RoundedCornerShape(50),
-                            color = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.7f),
+                            color = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.75f),
                         ) {
                             Row(
-                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
                                 verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(3.dp),
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
                             ) {
                                 Icon(
                                     imageVector = Icons.Rounded.AutoAwesome,
@@ -341,7 +378,7 @@ private fun MemoryTimelineCard(
                                     modifier = Modifier.size(11.dp),
                                 )
                                 Text(
-                                    text = "提炼中…",
+                                    text = streamingPreview?.stageLabel ?: "提炼中…",
                                     style = MaterialTheme.typography.labelSmall,
                                 )
                             }
@@ -374,14 +411,78 @@ private fun MemoryTimelineCard(
                 }
             }
 
-            // Primary AI-distilled summary (no separate title; raw content lives in sheet)
-            Text(
-                text = memory.summary.ifBlank { memory.content },
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = if (expanded) Int.MAX_VALUE else 2,
-                overflow = TextOverflow.Ellipsis,
-            )
+            AnimatedContent(
+                targetState = memory.analysisStatus,
+                transitionSpec = {
+                    fadeIn(animationSpec = spring(dampingRatio = 1.0f, stiffness = 1600f)) togetherWith
+                        fadeOut(animationSpec = spring(dampingRatio = 1.0f, stiffness = 1600f))
+                },
+                label = "cardAnalysisTransition",
+            ) { status ->
+                if (status == MemoryAnalysisStatus.PENDING) {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(
+                            text = memory.summary.ifBlank { memory.content },
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        val partial = streamingPreview?.partialText.orEmpty()
+                        if (partial.isNotBlank()) {
+                            // Optical inner radius: outer 20dp - 12dp padding = 8dp
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text(
+                                    text = partial,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 6,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.padding(10.dp),
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            text = memory.summary.ifBlank { memory.content },
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = if (expanded) Int.MAX_VALUE else 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+
+                        if (memory.telemetryBadge.isNotBlank()) {
+                            val isModelDriven = memory.analysisSource == AnalysisSource.MNN_EDGE ||
+                                memory.analysisSource == AnalysisSource.CLOUD_SSE
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = if (isModelDriven) {
+                                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f)
+                                } else {
+                                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+                                },
+                            ) {
+                                Text(
+                                    text = memory.telemetryBadge,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (isModelDriven) {
+                                        MaterialTheme.colorScheme.onPrimaryContainer
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                    },
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                )
+                            }
+                        }
+                    }
+                }
+            }
 
             if (expanded) {
                 if (memory.tags.isNotEmpty()) {
@@ -391,14 +492,14 @@ private fun MemoryTimelineCard(
                     ) {
                         memory.tags.forEach { tag ->
                             Surface(
-                                shape = RoundedCornerShape(6.dp),
+                                shape = RoundedCornerShape(8.dp),
                                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
                             ) {
                                 Text(
                                     text = "#$tag",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
                                 )
                             }
                         }
@@ -413,55 +514,84 @@ private fun MemoryTimelineCard(
                     )
                 }
 
-                Row(
+                // In-place raw text expansion (replaces RawMemoryBottomSheet)
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    if (memory.relations.isNotEmpty()) {
+                    Column(
+                        modifier = Modifier.padding(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
                         Row(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
-                                .clickable(onClick = onOpenGraph)
-                                .padding(horizontal = 6.dp, vertical = 4.dp),
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp),
                         ) {
-                            Icon(
-                                imageVector = Icons.Outlined.Hub,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(14.dp),
-                            )
                             Text(
-                                text = "脉络 (${memory.relations.size})",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.primary,
+                                text = "原始记录 · ${memory.content.length} 字",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            IconButton(
+                                onClick = onCopyRaw,
+                                modifier = Modifier.size(28.dp),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.ContentCopy,
+                                    contentDescription = "复制原文",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(15.dp),
+                                )
+                            }
+                        }
+                        HorizontalDivider(
+                            thickness = 0.5.dp,
+                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f),
+                        )
+                        SelectionContainer {
+                            Text(
+                                text = memory.content,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface,
                             )
                         }
-                    } else {
-                        Spacer(modifier = Modifier.width(1.dp))
                     }
+                }
 
+                if (memory.relations.isNotEmpty()) {
                     Row(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(8.dp))
-                            .clickable(onClick = onOpenRawMemory)
-                            .padding(horizontal = 6.dp, vertical = 4.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.Start,
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(3.dp),
                     ) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Rounded.Subject,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
-                            modifier = Modifier.size(14.dp),
-                        )
-                        Text(
-                            text = "原文",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
-                        )
+                        Surface(
+                            shape = RoundedCornerShape(50),
+                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f),
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(50))
+                                .clickable(onClick = onOpenGraph),
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.Hub,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(14.dp),
+                                )
+                                Text(
+                                    text = "脉络图谱 (${memory.relations.size})",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.Medium,
+                                    color = MaterialTheme.colorScheme.primary,
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -487,7 +617,7 @@ private fun ScheduleInlineStrip(
 
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(10.dp),
+        shape = RoundedCornerShape(8.dp),
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.42f),
     ) {
         Row(

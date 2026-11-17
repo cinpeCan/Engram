@@ -8,6 +8,7 @@ import io.github.cinpecan.engram.data.preferences.EnginePreferencesRepository
 import io.github.cinpecan.engram.data.remote.ModelDescriptorDto
 import io.github.cinpecan.engram.data.remote.ModelDownloadManager
 import io.github.cinpecan.engram.data.remote.ModelDownloadState
+import io.github.cinpecan.engram.domain.model.InferenceMode
 import io.github.cinpecan.engram.edgemnn.EdgeAiEngine
 import io.github.cinpecan.engram.edgemnn.EngineState
 import io.github.cinpecan.engram.edgemnn.UnloadReason
@@ -27,6 +28,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 sealed interface EngineIntent {
+    data class SelectMode(val mode: InferenceMode) : EngineIntent
     data class UpdateServerUrlInput(val url: String) : EngineIntent
     data object SyncCatalog : EngineIntent
     data class ToggleDownload(val model: ModelDescriptorDto) : EngineIntent
@@ -41,7 +43,8 @@ sealed interface EngineEffect {
 @Immutable
 data class EngineRuntimeStatus(
     val engineState: EngineState = EngineState.Unloaded,
-    val nativeHeapMb: Double = 0.0,
+    val residentMemoryMb: Double = 0.0,
+    val isBackendAvailable: Boolean = false,
 )
 
 @Immutable
@@ -68,17 +71,27 @@ class EngineViewModel(
     private val effectChannel = Channel<EngineEffect>(Channel.BUFFERED)
     val effects: Flow<EngineEffect> = effectChannel.receiveAsFlow()
 
+    val inferenceMode: StateFlow<InferenceMode> = preferencesRepository.preferencesFlow
+        .map { it.inferenceMode }
+        .distinctUntilChanged()
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000L),
+            initialValue = InferenceMode.OFFLINE_EDGE,
+        )
+
     val runtimeStatus: StateFlow<EngineRuntimeStatus> = edgeEngine.state
         .map { state ->
             EngineRuntimeStatus(
                 engineState = state,
-                nativeHeapMb = edgeEngine.currentNativeHeapBytes() / (1024.0 * 1024.0),
+                residentMemoryMb = edgeEngine.currentMemoryBytes() / (1024.0 * 1024.0),
+                isBackendAvailable = edgeEngine.isBackendAvailable,
             )
         }
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5_000L),
-            initialValue = EngineRuntimeStatus(),
+            initialValue = EngineRuntimeStatus(isBackendAvailable = edgeEngine.isBackendAvailable),
         )
 
     val catalogItems: StateFlow<List<ModelCatalogItemUi>> = combine(
@@ -110,6 +123,11 @@ class EngineViewModel(
 
     fun onIntent(intent: EngineIntent) {
         when (intent) {
+            is EngineIntent.SelectMode -> {
+                viewModelScope.launch {
+                    preferencesRepository.setInferenceMode(intent.mode)
+                }
+            }
             is EngineIntent.UpdateServerUrlInput -> {
                 hasUserEditedServerUrl = true
                 serverUrlInputFlow.value = intent.url
@@ -151,23 +169,20 @@ class EngineViewModel(
     }
 
     private fun loadModel(model: ModelDescriptorDto) {
-        if (model.role == "embedding") {
-            effectChannel.trySend(
-                EngineEffect.ShowMessage("句向量模型文件已就绪；当前端侧向量检索由内置轻量特征哈希引擎驱动"),
-            )
+        val completed = downloadManager.downloadStates.value[model.id] as? ModelDownloadState.Completed
+        if (completed == null) {
+            effectChannel.trySend(EngineEffect.ShowMessage("请先完整下载模型权重后再加载"))
+            return
+        }
+        if (!edgeEngine.isBackendAvailable) {
+            effectChannel.trySend(EngineEffect.ShowMessage("当前安装包未内置 MNN 原生库，无法加载权重"))
             return
         }
         viewModelScope.launch {
-            val completed = downloadManager.downloadStates.value[model.id] as? ModelDownloadState.Completed
-            val dir = completed?.localDirPath ?: ""
-            val result = edgeEngine.loadModel(model.id, dir)
+            val result = edgeEngine.loadModel(model.id, completed.localDirPath)
             val msg = if (result.isSuccess) {
                 preferencesRepository.setSelectedModelId(model.id)
-                if (dir.isNotEmpty()) {
-                    "已加载本地量化权重：${model.name}"
-                } else {
-                    "已激活端侧 JNI 运行时会话（轻量模式）"
-                }
+                "已加载本地量化权重：${model.name}"
             } else {
                 "加载失败：${result.exceptionOrNull()?.message}"
             }
@@ -176,12 +191,16 @@ class EngineViewModel(
     }
 
     private fun releaseMemoryNow() {
+        val current = edgeEngine.state.value
+        if (current !is EngineState.Ready && current !is EngineState.Generating) {
+            return
+        }
         viewModelScope.launch {
             val reclaimedBytes = edgeEngine.unload(UnloadReason.USER_REQUESTED)
             val mb = reclaimedBytes / (1024.0 * 1024.0)
             effectChannel.send(
                 EngineEffect.ShowMessage(
-                    String.format(Locale.US, "已卸载端侧会话，回收 Native 内存 %.1f MB", mb),
+                    String.format(Locale.US, "已卸载端侧会话，回收内存 %.1f MB", mb),
                 ),
             )
         }

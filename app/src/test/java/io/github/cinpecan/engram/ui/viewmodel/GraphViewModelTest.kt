@@ -1,8 +1,11 @@
 package io.github.cinpecan.engram.ui.viewmodel
 
 import io.github.cinpecan.engram.data.local.LocalMemoryStore
+import io.github.cinpecan.engram.data.remote.CloudSseClient
 import io.github.cinpecan.engram.data.repository.MemoryRepository
+import io.github.cinpecan.engram.data.repository.UnifiedInferenceRouter
 import io.github.cinpecan.engram.domain.analyzer.MemoryAnalyzer
+import io.github.cinpecan.engram.domain.model.AnalysisSource
 import io.github.cinpecan.engram.domain.model.MemoryAnalysisPayload
 import io.github.cinpecan.engram.domain.model.MemoryAnalysisStatus
 import io.github.cinpecan.engram.domain.model.MemoryItem
@@ -22,6 +25,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
+import okhttp3.OkHttpClient
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -50,25 +54,25 @@ class GraphViewModelTest {
         override suspend fun updateMemoryAnalysis(
             memoryId: String,
             payload: MemoryAnalysisPayload,
-            embedding: FloatArray?,
+            analysisSource: AnalysisSource,
+            telemetryBadge: String,
         ) = Unit
         override suspend fun markCalendarSaved(memoryId: String) = Unit
         override suspend fun getAllMemories(): List<MemoryItem> = items.value
-        override suspend fun queryFtsLexicalIds(query: String): List<String> = emptyList()
-        override suspend fun loadAllEmbeddings(): Map<String, FloatArray> = emptyMap()
         override suspend fun countMemories(): Int = items.value.size
     }
 
     private class StubEngine : EdgeAiEngine {
         override val state: StateFlow<EngineState> = MutableStateFlow(EngineState.Unloaded)
         override val lastTelemetry: StateFlow<InferenceTelemetry?> = MutableStateFlow(null)
-        override suspend fun loadModel(modelId: String, modelDirPath: String) = Result.success(Unit)
+        override val isBackendAvailable: Boolean = false
+        override suspend fun loadModel(modelId: String, modelDirPath: String) =
+            Result.failure<Unit>(IllegalStateException("unavailable"))
         override fun streamGenerate(prompt: String, maxTokens: Int): Flow<StreamChunk> = flow {}
-        override suspend fun embedText(text: String, dims: Int) = FloatArray(dims)
         override suspend fun unload(reason: UnloadReason): Long = 0L
         override fun cancelActiveGeneration() = Unit
         override fun onTrimMemory(level: Int) = Unit
-        override fun currentNativeHeapBytes(): Long = 0L
+        override fun currentMemoryBytes(): Long = 0L
     }
 
     @Test
@@ -108,8 +112,8 @@ class GraphViewModelTest {
         )
 
         val store = FakeStore(listOf(m1, m2, m3NoRel))
-        val engine = StubEngine()
-        val repo = MemoryRepository(store, engine, MemoryAnalyzer(engine), backgroundScope = backgroundScope)
+        val router = UnifiedInferenceRouter(StubEngine(), CloudSseClient(OkHttpClient()), MemoryAnalyzer())
+        val repo = MemoryRepository(store, router, backgroundScope = backgroundScope)
         val vm = GraphViewModel(repo)
 
         backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {

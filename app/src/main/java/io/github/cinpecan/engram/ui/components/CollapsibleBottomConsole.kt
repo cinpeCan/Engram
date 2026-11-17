@@ -1,6 +1,5 @@
 package io.github.cinpecan.engram.ui.components
 
-import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.layout.Box
@@ -54,7 +53,7 @@ class CollapsibleConsoleState(
         get() = if (consoleHeightPx <= 0f) 0f else (offsetPx / consoleHeightPx).coerceIn(0f, 1f)
 
     private var reverseAccumulatorPx = 0f
-    private var lastScrollDirection = 0 // -1 collapsing (scroll down list), +1 expanding (scroll up list)
+    private var lastScrollDirection = 0
     private var snapJob: Job? = null
 
     fun updateHeight(newHeightPx: Float) {
@@ -80,8 +79,8 @@ class CollapsibleConsoleState(
                 initialValue = offsetPx,
                 targetValue = 0f,
                 animationSpec = spring(
-                    dampingRatio = 0.86f,
-                    stiffness = Spring.StiffnessMedium,
+                    dampingRatio = 0.8f,
+                    stiffness = 380f,
                 ),
             ) { value, _ ->
                 offsetPx = value
@@ -109,8 +108,8 @@ class CollapsibleConsoleState(
                 initialValue = offsetPx,
                 targetValue = target,
                 animationSpec = spring(
-                    dampingRatio = 0.86f,
-                    stiffness = Spring.StiffnessMedium,
+                    dampingRatio = 0.8f,
+                    stiffness = 380f,
                 ),
             ) { value, _ ->
                 offsetPx = value

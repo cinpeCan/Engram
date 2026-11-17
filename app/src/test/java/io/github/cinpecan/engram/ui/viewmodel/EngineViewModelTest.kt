@@ -3,12 +3,14 @@ package io.github.cinpecan.engram.ui.viewmodel
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import io.github.cinpecan.engram.data.preferences.EnginePreferencesRepository
 import io.github.cinpecan.engram.data.remote.ModelDownloadManager
+import io.github.cinpecan.engram.domain.model.InferenceMode
 import io.github.cinpecan.engram.edgemnn.EdgeAiEngine
 import io.github.cinpecan.engram.edgemnn.EngineState
 import io.github.cinpecan.engram.edgemnn.InferenceTelemetry
 import io.github.cinpecan.engram.edgemnn.StreamChunk
 import io.github.cinpecan.engram.edgemnn.UnloadReason
 import io.github.cinpecan.engram.util.MainDispatcherRule
+import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -37,51 +39,63 @@ class EngineViewModelTest {
     @get:Rule
     val tempFolder = TemporaryFolder()
 
-    private class StubEdgeEngine : EdgeAiEngine {
+    private class StubEdgeEngine(
+        override val isBackendAvailable: Boolean = true,
+    ) : EdgeAiEngine {
         private val _state = MutableStateFlow<EngineState>(EngineState.Unloaded)
         override val state: StateFlow<EngineState> = _state
         override val lastTelemetry: StateFlow<InferenceTelemetry?> = MutableStateFlow(null)
 
         val unloadReasons = mutableListOf<UnloadReason>()
-        private var heapBytes = 0L
+        var loadCalls = 0
+        private var rssBytes = 0L
 
         override suspend fun loadModel(modelId: String, modelDirPath: String): Result<Unit> {
-            heapBytes = 128L * 1024 * 1024
-            _state.value = EngineState.Ready(modelId = modelId, backendName = "MNN", nativeHeapBytes = heapBytes)
+            loadCalls++
+            rssBytes = 128L * 1024 * 1024
+            _state.value = EngineState.Ready(
+                modelId = modelId,
+                backendName = "MNN-LLM (ARM64)",
+                residentMemoryBytes = rssBytes,
+                modelFootprintBytes = rssBytes,
+            )
             return Result.success(Unit)
         }
 
         override fun streamGenerate(prompt: String, maxTokens: Int): Flow<StreamChunk> = flow {}
-        override suspend fun embedText(text: String, dims: Int) = FloatArray(dims)
 
         override suspend fun unload(reason: UnloadReason): Long {
             unloadReasons.add(reason)
-            val reclaimed = heapBytes
-            heapBytes = 0L
+            val reclaimed = rssBytes
+            rssBytes = 0L
             _state.value = EngineState.Unloaded
             return reclaimed
         }
 
         override fun cancelActiveGeneration() = Unit
         override fun onTrimMemory(level: Int) = Unit
-        override fun currentNativeHeapBytes(): Long = heapBytes
+        override fun currentMemoryBytes(): Long = rssBytes
     }
 
     @Test
-    fun syncCatalogLoadModelAndReleaseMemoryEmitOrderedStateAndSingleEffects() = runTest {
+    fun syncCatalogRejectsUnreadyLoadAllowsVerifiedLoadAndReleasesMemory() = runTest {
         val dataStore = PreferenceDataStoreFactory.create(
             scope = CoroutineScope(backgroundScope.coroutineContext + Dispatchers.IO),
             produceFile = { tempFolder.newFile("engine_prefs.preferences_pb") },
         )
         val prefsRepo = EnginePreferencesRepository(dataStore)
+        val modelsRoot = tempFolder.newFolder("models")
         val downloadManager = ModelDownloadManager(
-            primaryModelsDir = tempFolder.newFolder("models"),
+            primaryModelsDir = modelsRoot,
             externalModelsDir = null,
             okHttpClient = OkHttpClient(),
         )
-        val engine = StubEdgeEngine()
+        val engine = StubEdgeEngine(isBackendAvailable = true)
         val vm = EngineViewModel(engine, downloadManager, prefsRepo)
 
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+            vm.inferenceMode.collect {}
+        }
         backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
             vm.runtimeStatus.collect {}
         }
@@ -89,27 +103,48 @@ class EngineViewModelTest {
             vm.catalogItems.collect {}
         }
 
+        vm.onIntent(EngineIntent.SelectMode(InferenceMode.CLOUD_COLLAB))
+        assertEquals(
+            InferenceMode.CLOUD_COLLAB,
+            prefsRepo.preferencesFlow.first { it.inferenceMode == InferenceMode.CLOUD_COLLAB }.inferenceMode,
+        )
+        assertEquals(
+            InferenceMode.CLOUD_COLLAB,
+            vm.inferenceMode.first { it == InferenceMode.CLOUD_COLLAB },
+        )
+
         vm.onIntent(EngineIntent.UpdateServerUrlInput("http://127.0.0.1:9/"))
         assertEquals("http://127.0.0.1:9/", vm.serverUrlInput.value)
 
         vm.onIntent(EngineIntent.SyncCatalog)
-
         val syncEffect = vm.effects.first() as EngineEffect.ShowMessage
         assertTrue(syncEffect.message.contains("已保存网关地址"))
         assertEquals("http://127.0.0.1:9", prefsRepo.preferencesFlow.first().serverBaseUrl)
-        assertEquals("http://127.0.0.1:9", vm.serverUrlInput.value)
         assertFalse(vm.isRefreshing.first { !it })
 
-        val targetModel = ModelDownloadManager.builtInCatalog().first { it.id == "qwen2.5-1.5b-instruct-mnn" }
-        vm.onIntent(EngineIntent.LoadModel(targetModel))
+        val targetModel = ModelDownloadManager.builtInCatalog().single()
 
-        val loadEffect = vm.effects.first() as EngineEffect.ShowMessage
-        assertTrue(loadEffect.message.contains("端侧 JNI 运行时会话"))
-        assertEquals("qwen2.5-1.5b-instruct-mnn", prefsRepo.preferencesFlow.first().selectedModelId)
-        val selectedItems = vm.catalogItems.first { list ->
-            list.any { it.model.id == "qwen2.5-1.5b-instruct-mnn" && it.isSelected }
+        // Honest rejection before weights are downloaded
+        vm.onIntent(EngineIntent.LoadModel(targetModel))
+        val rejectEffect = vm.effects.first() as EngineEffect.ShowMessage
+        assertTrue(rejectEffect.message.contains("请先完整下载模型权重"))
+        assertEquals(0, engine.loadCalls)
+        assertEquals(EngineState.Unloaded, vm.runtimeStatus.value.engineState)
+
+        // Stage verified model bundle with `.sha256` markers
+        val modelDir = File(modelsRoot, targetModel.id).apply { mkdirs() }
+        val dummySha = "a".repeat(64)
+        for (spec in targetModel.files) {
+            File(modelDir, spec.name).writeText(if (spec.name == "llm_config.json") "{}" else "weights")
+            File(modelDir, "${spec.name}.sha256").writeText(dummySha)
         }
-        assertTrue(selectedItems.first { it.model.id == "qwen2.5-1.5b-instruct-mnn" }.isSelected)
+        downloadManager.refreshLocalModelStates()
+
+        vm.onIntent(EngineIntent.LoadModel(targetModel))
+        val loadEffect = vm.effects.first() as EngineEffect.ShowMessage
+        assertTrue(loadEffect.message.contains("已加载本地量化权重"))
+        assertEquals(1, engine.loadCalls)
+        assertEquals(targetModel.id, prefsRepo.preferencesFlow.first().selectedModelId)
         assertTrue(vm.runtimeStatus.value.engineState is EngineState.Ready)
 
         vm.onIntent(EngineIntent.ReleaseMemoryNow)
