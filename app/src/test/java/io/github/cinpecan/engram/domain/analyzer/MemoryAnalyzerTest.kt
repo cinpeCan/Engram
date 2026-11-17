@@ -45,6 +45,24 @@ class MemoryAnalyzerTest {
     }
 
     @Test
+    fun normalizesMultiClauseModelSummariesIntoConciseBullets() {
+        val analyzer = MemoryAnalyzer()
+        val rawOutput = """
+            {
+              "summary": "法务张姐审核违约金条款；财务刘敏等待陈工提交验收单后放行预付款；王总周五前跟进。",
+              "tags": ["商务合同"],
+              "calendarProposal": null,
+              "relations": []
+            }
+        """.trimIndent()
+        val parsed = analyzer.mergeModelJsonOrNull(rawOutput, "测试多条纪要")!!
+        val lines = parsed.summary.lines()
+        assertEquals(3, lines.size)
+        assertTrue(lines.all { it.startsWith("• ") })
+        assertTrue(lines.none { it.contains('；') })
+    }
+
+    @Test
     fun extractsDistilledSummaryAndExactTimeForRelativeDurationNotes() {
         val zone = ZoneId.of("Asia/Shanghai")
         val nowMillis = LocalDateTime.of(2026, 11, 17, 17, 30, 0)

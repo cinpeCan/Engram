@@ -56,7 +56,7 @@ def test_analyze_stream_returns_503_when_api_key_missing(monkeypatch) -> None:
 
 def test_analyze_stream_sse_matches_contract_and_analysis_schema(monkeypatch) -> None:
     analysis_payload = {
-        "summary": "明日 15:00 与法务张姐对齐采购合同补充条款。",
+        "summary": "• 明日 15:00 · 软件园三期B区7楼会议室\n• 与法务张姐对齐采购合同补充条款",
         "tags": ["法务商务", "日程跟进"],
         "calendarProposal": {
             "title": "柔性屏采购合同补充条款评审",

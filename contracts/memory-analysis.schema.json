@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/cinpeCan/Engram/contracts/memory-analysis.schema.json",
   "title": "MemoryAnalysisPayload",
-  "description": "Structured White-Box Memory extraction output: summary, tags, human-in-the-loop calendar proposal, and 2D directed graph triples.",
+  "description": "Structured White-Box Memory extraction output: concise bullet-point summary (newline-separated when multi-point), tags, human-in-the-loop calendar proposal, and 2D directed graph triples.",
   "type": "object",
   "required": ["summary", "tags", "calendarProposal", "relations"],
   "additionalProperties": false,
@@ -10,7 +10,7 @@
     "summary": {
       "type": "string",
       "minLength": 1,
-      "maxLength": 200
+      "maxLength": 300
     },
     "tags": {
       "type": "array",

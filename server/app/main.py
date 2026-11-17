@@ -92,7 +92,7 @@ def _build_analysis_messages(request: AnalysisStreamRequest) -> list[dict[str, s
     system_prompt = (
         "你是印迹（Engram）白盒记忆结构化提炼助手。"
         "请将用户的原始随手记提炼为 JSON 对象，严格匹配以下 schema，不要输出额外解释或 Markdown：\n"
-        '{"summary":"20~100字核心摘要（保留关键人物/时间/事项与结论，勿泄露明文密码或口令）",'
+        '{"summary":"若含多个要点，请分2~3条输出，每行以 \\"• \\" 开头并用 \\\\n 分隔，每条不超过22字，用主谓宾短句直述重点、杜绝长难句；若仅单一简短事项可直接1条短句（不超过24字）；严禁泄露明文密码/口令（统一替换为详见原文）",'
         '"tags":["场景标签（最多3个，无合适返回[]）"],'
         '"calendarProposal":{"title":"日程标题","startTimeIso":"YYYY-MM-DDTHH:MM:SS","durationMinutes":60,"location":null},'
         '"relations":[{"source":"实体A","target":"实体B","relation":"关系标签","bidirectional":false}]}\n'

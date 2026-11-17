@@ -29,8 +29,8 @@ class MemoryAnalyzer(
         val formattedNow = nowLocal.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm (EEEE)"))
         return """
             你是印迹（Engram）白盒记忆助手。当前本地时间：$formattedNow。
-            请将用户的松散原始记录提炼为凝练完整的摘要（1~2句话，保留关键人物、时间、事项与核心结论，不要写成简短标题，也不要直接暴露明文密码口令；20~100字），并提取场景标签（无合适分类返回 []）、日程提议（若含"1小时后"等相对时间请换算为精确ISO时间）及实体关系三元组，仅输出 JSON_SCHEMA：
-            {"summary":"AI提炼的完整核心摘要","tags":["场景标签"],"calendarProposal":{"title":"日程事项","startTimeIso":"YYYY-MM-DDTHH:MM:SS","durationMinutes":30,"location":null},"relations":[{"source":"","target":"","relation":"","bidirectional":false}]}
+            请将用户的原始随手记提炼为 1~3条精炼分点要点（多要点每行以 "• " 开头并用 \n 分隔，单条不超过22字，杜绝长难句，勿暴露明文密码口令），并提取场景标签（无合适分类返回 []）、日程提议（若含"1小时后"等相对时间请换算为精确ISO时间）及实体关系三元组，仅输出 JSON_SCHEMA：
+            {"summary":"• 要点一\n• 要点二","tags":["场景标签"],"calendarProposal":{"title":"日程事项","startTimeIso":"YYYY-MM-DDTHH:MM:SS","durationMinutes":30,"location":null},"relations":[{"source":"","target":"","relation":"","bidirectional":false}]}
             原文：$content
         """.trimIndent()
     }
@@ -51,12 +51,66 @@ class MemoryAnalyzer(
             .distinct()
             .take(3)
         val resolvedTags = modelTags.ifEmpty { heuristic.tags }
+        val normalizedSummary = normalizeBulletSummary(parsedFromModel.summary).ifBlank { heuristic.summary }
         return parsedFromModel.copy(
-            summary = parsedFromModel.summary.ifBlank { heuristic.summary }.take(160),
+            summary = normalizedSummary,
             tags = resolvedTags,
             calendarProposal = parsedFromModel.calendarProposal ?: heuristic.calendarProposal,
             relations = cleanedRelations,
         )
+    }
+
+    internal fun normalizeBulletSummary(rawSummary: String): String {
+        if (rawSummary.isBlank()) return ""
+        val rawSegments = rawSummary
+            .replace("\r\n", "\n")
+            .split('\n', '；', ';', '。', '！', '？')
+            .map { segment ->
+                BULLET_PREFIX_REGEX.replace(segment.trim(), "")
+                    .trim(' ', '\t', '，', ',', '、', '•', '·')
+            }
+            .filter { it.isNotBlank() }
+
+        val concisePoints = ArrayList<String>(4)
+        for (segment in rawSegments) {
+            if (segment.length > 28 && (segment.contains('，') || segment.contains(','))) {
+                val subClauses = segment.split('，', ',')
+                    .map { it.trim() }
+                    .filter { it.isNotBlank() }
+                var carry = ""
+                for (clause in subClauses) {
+                    val combined = if (carry.isEmpty()) clause else "$carry，$clause"
+                    if (combined.length < 6) {
+                        carry = combined
+                    } else {
+                        concisePoints += combined
+                        carry = ""
+                    }
+                }
+                if (carry.isNotBlank()) {
+                    if (concisePoints.isNotEmpty() && carry.length < 8) {
+                        val lastIdx = concisePoints.lastIndex
+                        concisePoints[lastIdx] = "${concisePoints[lastIdx]}，$carry"
+                    } else {
+                        concisePoints += carry
+                    }
+                }
+            } else {
+                concisePoints += segment
+            }
+        }
+
+        val capped = concisePoints
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .distinct()
+            .take(4)
+
+        return when {
+            capped.isEmpty() -> ""
+            capped.size == 1 -> capped[0].take(60)
+            else -> capped.joinToString("\n") { "• ${it.take(36)}" }.take(260)
+        }
     }
 
     fun fallbackAnalyze(
@@ -109,9 +163,13 @@ class MemoryAnalyzer(
                     else -> startDt.format(DateTimeFormatter.ofPattern("MM-dd"))
                 }
                 val timePart = startDt.format(DateTimeFormatter.ofPattern("HH:mm"))
-                val locPart = calendar.location?.takeIf { it.isNotBlank() }?.let { "于$it" }.orEmpty()
+                val locPart = calendar.location?.takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty()
                 val actionCore = if (calendar.title.length <= 4) "${calendar.title}安排" else calendar.title
-                "$dateLabel $timePart$locPart，$actionCore。".take(100)
+                if (calendar.location.isNullOrBlank() && actionCore.length <= 12) {
+                    "$dateLabel $timePart $actionCore".take(60)
+                } else {
+                    "• $dateLabel $timePart$locPart\n• ${actionCore.take(36)}"
+                }
             }.getOrNull()
             if (!formatted.isNullOrBlank()) {
                 return formatted
@@ -128,22 +186,15 @@ class MemoryAnalyzer(
             .filter { it.isNotBlank() }
 
         if (clauses.isEmpty()) {
-            return if (redacted.length > 96) redacted.take(96) + "…" else redacted
+            return if (redacted.length > 60) redacted.take(60) + "…" else redacted
         }
 
-        val sb = StringBuilder()
-        for (clause in clauses) {
-            val nextLen = if (sb.isEmpty()) clause.length else sb.length + 1 + clause.length
-            if (sb.isNotEmpty() && nextLen > 92) break
-            if (sb.isNotEmpty()) sb.append('；')
-            sb.append(clause)
-            if (sb.length >= 44) break
-        }
-        val joined = sb.toString().trim()
-        return when {
-            joined.length > 96 -> joined.take(96) + "…"
-            joined.endsWith("。") || joined.endsWith("！") || joined.endsWith("？") -> joined
-            else -> "$joined。"
+        val normalized = normalizeBulletSummary(clauses.joinToString("\n"))
+        val lines = normalized.lines().take(3)
+        return if (lines.size == 1) {
+            lines[0].removePrefix("• ").trim()
+        } else {
+            lines.joinToString("\n")
         }
     }
 
@@ -428,6 +479,7 @@ class MemoryAnalyzer(
         )
         private val LEADING_MODAL_REGEX = Regex("""^(?:记得|提醒我|别忘了|待会儿?|等会儿?|顺便|准备|去(?=吃饭|拿|取|买|开会|见))""")
         private val LEADING_TOPIC_PREFIX_REGEX = Regex("""^(?:供应商对接|采购推进卡点复盘|项目同步|会议纪要|备忘|记录一下|随手记)[:：]\s*""")
+        private val BULLET_PREFIX_REGEX = Regex("""^(?:[•·\-\*]|\d+[.)、])\s*""")
         private val ACCOUNT_SECRET_PAIR_REGEX = Regex(
             """(?:调试后台|测试后台|后台|登录)?账号\s*[:：]?\s*[A-Za-z0-9_.-]{3,}(?:\s*[，,、\s]+\s*(?:初始)?(?:密码|口令|token|key)\s*[:：]?\s*[^\s，。,；;]+)?""",
             RegexOption.IGNORE_CASE,

@@ -6,6 +6,7 @@ import io.github.cinpecan.engram.data.preferences.EnginePreferencesRepository
 import io.github.cinpecan.engram.data.seed.SeedStorylineProvider
 import io.github.cinpecan.engram.domain.model.AnalysisSource
 import io.github.cinpecan.engram.domain.model.InferenceMode
+import io.github.cinpecan.engram.domain.model.MemoryAnalysisPayload
 import io.github.cinpecan.engram.domain.model.MemoryAnalysisStatus
 import io.github.cinpecan.engram.domain.model.MemoryItem
 import io.github.cinpecan.engram.domain.model.StreamingPreviewState
@@ -49,6 +50,28 @@ class MemoryRepository(
                     store.insertRawMemory(seed)
                 }
                 preferencesRepository?.markStorylineSeeded()
+            } else {
+                val existingById = store.getAllMemories().associateBy { it.id }
+                val latestSeeds = SeedStorylineProvider.createInitialStoryline()
+                for (seed in latestSeeds) {
+                    val existing = existingById[seed.id]
+                    if (existing != null &&
+                        existing.analysisSource == AnalysisSource.SEED &&
+                        (existing.telemetryBadge.isNotEmpty() || existing.summary != seed.summary)
+                    ) {
+                        store.updateMemoryAnalysis(
+                            memoryId = seed.id,
+                            payload = MemoryAnalysisPayload(
+                                summary = seed.summary,
+                                tags = seed.tags,
+                                calendarProposal = existing.calendarProposal ?: seed.calendarProposal,
+                                relations = existing.relations.ifEmpty { seed.relations },
+                            ),
+                            analysisSource = AnalysisSource.SEED,
+                            telemetryBadge = "",
+                        )
+                    }
+                }
             }
         }
     }

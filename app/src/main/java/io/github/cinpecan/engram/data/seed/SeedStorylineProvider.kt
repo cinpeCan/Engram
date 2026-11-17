@@ -29,7 +29,7 @@ object SeedStorylineProvider {
         val day1 = MemoryItem(
             id = "seed-1",
             content = "供应商对接：王总引荐了供应链老李负责新一代柔性护眼屏模组报价，给到 60 天月结账期，样品亮度测通标准。调试后台账号 test_panel，初始密码 Admin@9527，下周交接给研发陈工做烧屏测试。",
-            summary = "王总引荐供应链老李对接新一代柔性护眼屏模组报价（60 天月结），样品已达测通标准，下周交研发陈工做烧屏测试；已留存调试后台账号凭证。",
+            summary = "• 王总引荐老李对接柔性屏报价（60天月结）\n• 样品达标，下周交研发陈工做烧屏测试\n• 已留存调试后台账号凭证（详见原文）",
             tags = listOf("供应链", "凭证备份"),
             createdAtMillis = nowMillis - 2 * 24 * 60 * 60 * 1000L,
             analysisStatus = MemoryAnalysisStatus.READY,
@@ -41,13 +41,13 @@ object SeedStorylineProvider {
                 RelationTriple("seed-1_r2", "seed-1", "陈工", "柔性屏模组", "烧屏测试", bidirectional = false),
             ),
             analysisSource = AnalysisSource.SEED,
-            telemetryBadge = "预置示例",
+            telemetryBadge = "",
         )
 
         val day2 = MemoryItem(
             id = "seed-2",
             content = "采购推进卡点复盘：目前采购合同走到了法务张姐手里，她提醒老李提供的违约金与质保账期条款还要再对齐；同时财务刘敏需要先确认陈工的柔性屏模组测试验收单才能放行预付款，王总周五前要看最终进展。",
-            summary = "采购合同当前在法务张姐处对齐老李的违约金与质保账期条款；财务刘敏需待陈工确认测试验收单后放行预付款，王总要求周五前同步最终进展。",
+            summary = "• 法务张姐与老李对齐违约金及质保账期\n• 财务刘敏待陈工验收单后放行预付款\n• 王总要求周五前同步最终进展",
             tags = listOf("法务商务", "供应链"),
             createdAtMillis = nowMillis - 24 * 60 * 60 * 1000L,
             analysisStatus = MemoryAnalysisStatus.READY,
@@ -63,13 +63,13 @@ object SeedStorylineProvider {
                 RelationTriple("seed-2_r6", "seed-2", "法务张姐", "老李", "条款对齐", bidirectional = true),
             ),
             analysisSource = AnalysisSource.SEED,
-            telemetryBadge = "预置示例",
+            telemetryBadge = "",
         )
 
         val day3 = MemoryItem(
             id = "seed-3",
             content = "明天下午15:00在软件园三期B区7楼会议室，和法务张姐、陈工过一遍柔性屏采购合同补充条款并确认签字节点。",
-            summary = "明日 15:00 于软件园三期B区7楼会议室，与法务张姐、陈工过一遍柔性屏采购合同补充条款并确认签字节点。",
+            summary = "• 明日 15:00 · 软件园三期B区7楼会议室\n• 与法务张姐、陈工评审补充条款并确认签字",
             tags = listOf("日程跟进", "法务商务"),
             createdAtMillis = nowMillis - 2 * 60 * 60 * 1000L,
             analysisStatus = MemoryAnalysisStatus.READY,
@@ -86,7 +86,7 @@ object SeedStorylineProvider {
                 RelationTriple("seed-3_r2", "seed-3", "法务张姐", "陈工", "联合评审", bidirectional = true),
             ),
             analysisSource = AnalysisSource.SEED,
-            telemetryBadge = "预置示例",
+            telemetryBadge = "",
         )
 
         return listOf(day1, day2, day3)
