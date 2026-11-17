@@ -25,7 +25,16 @@ data class GraphNodeUi(
 )
 
 @Immutable
+data class GraphMemoryOption(
+    val id: String,
+    val title: String,
+    val edgeCount: Int,
+)
+
+@Immutable
 data class GraphUiState(
+    val activeMemoryId: String? = null,
+    val availableMemories: List<GraphMemoryOption> = emptyList(),
     val memoryTitle: String = "",
     val memorySummary: String = "",
     val nodes: List<GraphNodeUi> = emptyList(),
@@ -65,6 +74,17 @@ class GraphViewModel(
         @Suppress("UNCHECKED_CAST")
         val relatedMemories = values[5] as List<MemoryItem>
 
+        val availableMemories = memories
+            .filter { it.relations.isNotEmpty() }
+            .map { item ->
+                val count = MemoryAnalyzer.sanitizeRelations(item.relations).size
+                GraphMemoryOption(
+                    id = item.id,
+                    title = item.summary.ifBlank { item.content }.take(14),
+                    edgeCount = count,
+                )
+            }
+
         val targetMemory = memories.firstOrNull { it.id == requestedId }
             ?: memories.firstOrNull { it.relations.isNotEmpty() }
             ?: memories.firstOrNull()
@@ -82,6 +102,8 @@ class GraphViewModel(
         }
 
         GraphUiState(
+            activeMemoryId = targetMemory?.id,
+            availableMemories = availableMemories,
             memoryTitle = targetMemory?.summary?.take(28) ?: "2D 关系脉络",
             memorySummary = targetMemory?.content.orEmpty(),
             nodes = nodes,

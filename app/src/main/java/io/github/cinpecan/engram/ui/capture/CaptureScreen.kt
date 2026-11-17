@@ -209,32 +209,26 @@ private fun ElevatedCardContent(
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                Surface(
-                    shape = RoundedCornerShape(50),
-                    color = if (memory.analysisStatus == MemoryAnalysisStatus.READY) {
-                        MaterialTheme.colorScheme.secondaryContainer
-                    } else {
-                        MaterialTheme.colorScheme.tertiaryContainer
-                    },
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                if (memory.analysisStatus == MemoryAnalysisStatus.PENDING) {
+                    Surface(
+                        shape = RoundedCornerShape(50),
+                        color = MaterialTheme.colorScheme.tertiaryContainer,
                     ) {
-                        Icon(
-                            imageVector = Icons.Rounded.AutoAwesome,
-                            contentDescription = null,
-                            modifier = Modifier.size(12.dp),
-                        )
-                        Text(
-                            text = if (memory.analysisStatus == MemoryAnalysisStatus.READY) {
-                                "白盒已解析"
-                            } else {
-                                "端侧解析中"
-                            },
-                            style = MaterialTheme.typography.labelSmall,
-                        )
+                        Row(
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.AutoAwesome,
+                                contentDescription = null,
+                                modifier = Modifier.size(12.dp),
+                            )
+                            Text(
+                                text = "解析中…",
+                                style = MaterialTheme.typography.labelSmall,
+                            )
+                        }
                     }
                 }
             }

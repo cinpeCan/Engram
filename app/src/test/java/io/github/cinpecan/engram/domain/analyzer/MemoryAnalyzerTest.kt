@@ -6,13 +6,14 @@ import io.github.cinpecan.engram.edgemnn.EngineState
 import io.github.cinpecan.engram.edgemnn.InferenceTelemetry
 import io.github.cinpecan.engram.edgemnn.StreamChunk
 import io.github.cinpecan.engram.edgemnn.UnloadReason
+import java.time.LocalDateTime
+import java.time.ZoneId
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -47,7 +48,7 @@ class MemoryAnalyzerTest {
             ```json
             {
               "summary": "法务对齐合同条款",
-              "tags": ["法务商务"],
+              "tags": ["商务合同"],
               "calendarProposal": null,
               "relations": [
                 {"source": "张姐", "target": "张姐", "relation": "自环应过滤", "bidirectional": false},
@@ -62,6 +63,7 @@ class MemoryAnalyzerTest {
         val payload = analyzer.analyze("老李和法务张姐对接合同条款")
 
         assertEquals("法务对齐合同条款", payload.summary)
+        assertEquals(listOf("商务合同"), payload.tags)
         assertEquals(1, payload.relations.size)
         val edge = payload.relations.single()
         assertEquals("老李", edge.source)
@@ -70,21 +72,45 @@ class MemoryAnalyzerTest {
     }
 
     @Test
-    fun heuristicFallbackExtractsCalendarAndTriplesFromChineseText() = runTest {
-        val genericStub = """{"summary":"端侧结构化解析已完成","tags":["端侧推理"],"calendarProposal":null,"relations":[]}"""
-        val analyzer = MemoryAnalyzer(StubEdgeEngine(genericStub))
+    fun extractsCleanTitleAndExactTimeForRelativeDurationNotes() = runTest {
+        val zone = ZoneId.of("Asia/Shanghai")
+        val nowMillis = LocalDateTime.of(2026, 11, 17, 17, 30, 0)
+            .atZone(zone)
+            .toInstant()
+            .toEpochMilli()
+        val analyzer = MemoryAnalyzer(StubEdgeEngine("{}"), zoneId = zone)
 
-        val payload = analyzer.analyze(
+        val mealPayload = analyzer.analyze("1小时后吃饭", nowMillis = nowMillis)
+        assertEquals("吃饭", mealPayload.summary)
+        assertEquals(listOf("饮食", "日程提醒"), mealPayload.tags)
+
+        val mealCal = requireNotNull(mealPayload.calendarProposal)
+        assertEquals("吃饭", mealCal.title)
+        assertEquals("2026-11-17T18:30:00", mealCal.startTimeIso)
+        assertEquals(30, mealCal.durationMinutes)
+
+        val parcelPayload = analyzer.analyze("半小时后去拿快递", nowMillis = nowMillis)
+        val parcelCal = requireNotNull(parcelPayload.calendarProposal)
+        assertEquals("拿快递", parcelCal.title)
+        assertEquals("2026-11-17T18:00:00", parcelCal.startTimeIso)
+        assertEquals(listOf("生活待办", "日程提醒"), parcelPayload.tags)
+    }
+
+    @Test
+    fun heuristicFallbackExtractsCalendarLocationAndLeavesCasualNotesUntagged() = runTest {
+        val analyzer = MemoryAnalyzer(StubEdgeEngine("{}"))
+
+        val meetingPayload = analyzer.analyze(
             "明天下午15:00在软件园三期B区7楼会议室，和法务张姐、陈工过一遍采购合同补充条款。",
         )
-
-        val proposal = payload.calendarProposal
-        assertNotNull(proposal)
-        requireNotNull(proposal)
+        val proposal = requireNotNull(meetingPayload.calendarProposal)
         assertTrue(proposal.startTimeIso.contains("15:00"))
         assertEquals("软件园三期B区7楼会议室", proposal.location)
-        assertTrue(payload.relations.isNotEmpty())
-        assertTrue(payload.relations.none { it.source == it.target })
+        assertTrue(meetingPayload.relations.isNotEmpty())
+        assertTrue(meetingPayload.relations.none { it.source == it.target })
+
+        val casualPayload = analyzer.analyze("今天阳光很好")
+        assertTrue(casualPayload.tags.isEmpty())
     }
 
     @Test

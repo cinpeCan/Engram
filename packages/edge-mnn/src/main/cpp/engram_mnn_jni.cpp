@@ -93,10 +93,7 @@ bool ContainsAny(const std::string& haystack, const std::vector<std::string>& ne
 
 std::string SynthesizeEdgeResponse(const std::string& prompt) {
     if (ContainsAny(prompt, {"\"relations\"", "memory-analysis", "JSON_SCHEMA"})) {
-        return "{\"summary\":\"端侧结构化解析已完成\","
-               "\"tags\":[\"端侧推理\",\"白盒记忆\"],"
-               "\"calendarProposal\":null,"
-               "\"relations\":[]}";
+        return "{}";
     }
 
     // Extract cited lines passed inside prompt for grounded edge generation

@@ -5,42 +5,40 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
-import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
@@ -78,15 +76,17 @@ fun GraphScreen(
 
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val deponderState = rememberDeponderState(
-        physics = RootPhysics.fromPreset(DeponderDefaults.Presets.Balanced),
+        physics = RootPhysics.fromPreset(DeponderDefaults.Presets.Crisp).copy(
+            airDamping = 2.85f,
+            wallRepulsionDp = 36f,
+            minScale = 0.55f,
+            maxScale = 1.25f,
+        ),
     )
-
-    var scale by remember { mutableFloatStateOf(1.0f) }
-    var elasticity by remember { mutableFloatStateOf(DeponderDefaults.Rubber.ELASTICITY) }
 
     val lineColor = MaterialTheme.colorScheme.outline
     val labelColor = MaterialTheme.colorScheme.onSurface
-    val labelBgColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.88f)
+    val labelBgColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.92f)
 
     Column(
         modifier = modifier
@@ -101,60 +101,73 @@ fun GraphScreen(
             modifier = Modifier.fillMaxWidth(),
         ) {
             Column(
-                modifier = Modifier.padding(12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                Text(
-                    text = state.memoryTitle,
-                    style = MaterialTheme.typography.titleMedium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
+                    Text(
+                        text = state.memoryTitle,
+                        style = MaterialTheme.typography.titleMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
                     FilledTonalButton(
                         onClick = viewModel::replayStreamingGrowth,
                         enabled = state.totalEdgeCount > 1 && !state.isReplaying,
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
                     ) {
                         Icon(
                             imageVector = Icons.Rounded.PlayArrow,
                             contentDescription = null,
-                            modifier = Modifier.size(16.dp),
+                            modifier = Modifier.size(15.dp),
                         )
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text(if (state.isReplaying) "生长重演中…" else "流式生长重演")
+                        Text(
+                            text = if (state.isReplaying) "生长中…" else "生长重演",
+                            style = MaterialTheme.typography.labelMedium,
+                        )
                     }
-                    OutlinedButton(
+                    IconButton(
                         onClick = { deponderState.reheat() },
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                        modifier = Modifier.size(34.dp),
                     ) {
                         Icon(
                             imageVector = Icons.Rounded.Refresh,
-                            contentDescription = null,
-                            modifier = Modifier.size(16.dp),
+                            contentDescription = "重新整理排版",
+                            modifier = Modifier.size(18.dp),
                         )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("释放排版")
                     }
-                    Spacer(modifier = Modifier.weight(1f))
-                    Text(
-                        text = if (deponderState.isAwake) "模拟中" else "静止 0% CPU",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = if (deponderState.isAwake) {
-                            MaterialTheme.colorScheme.primary
-                        } else {
-                            MaterialTheme.colorScheme.secondary
-                        },
-                    )
+                }
+
+                if (state.availableMemories.size > 1) {
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        items(state.availableMemories, key = { it.id }) { option ->
+                            FilterChip(
+                                selected = state.activeMemoryId == option.id,
+                                onClick = { viewModel.bindMemory(option.id) },
+                                label = {
+                                    Text(
+                                        text = "${option.title} (${option.edgeCount})",
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                },
+                            )
+                        }
+                    }
                 }
             }
         }
 
-        // 2D Deponder Force-Directed Graph Canvas
+        // 2D Deponder Force-Directed Graph Canvas (auto-scaled and auto-spaced)
         Surface(
             modifier = Modifier
                 .weight(1f)
@@ -169,77 +182,97 @@ fun GraphScreen(
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
-                        text = "当前记忆暂无多方实体三元组，可先在「印迹」页录入包含多人物/环节的笔记。",
+                        text = "当前记忆暂无多方实体关系，可先在「印迹」页录入包含多人物或项目环节的笔记。",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(24.dp),
                     )
                 }
             } else {
-                Box(
+                BoxWithConstraints(
                     modifier = Modifier
                         .fillMaxSize()
-                        .background(MaterialTheme.colorScheme.surface)
-                        .deponderRoot(deponderState),
+                        .background(MaterialTheme.colorScheme.surface),
                 ) {
-                    state.visibleEdges.forEach { edge ->
-                        val edgeKey = if (edge.source <= edge.target) {
-                            "${edge.source}__${edge.target}"
-                        } else {
-                            "${edge.target}__${edge.source}"
-                        }
-                        key(edgeKey) {
-                            DeponderDefaultRubber(
-                                startId = edge.source,
-                                endId = edge.target,
-                                label = edge.relation,
-                                arrowMode = if (edge.bidirectional) {
-                                    DeponderArrowMode.BOTH
-                                } else {
-                                    DeponderArrowMode.END
-                                },
-                                physics = RubberPhysics(
-                                    elasticity = elasticity,
-                                    naturalLengthDp = 128f,
-                                ),
-                                insets = DeponderRubberInsets.Default,
-                                style = DeponderRubberStyle.of(
-                                    lineColor = lineColor,
-                                    lineThickness = 2.dp,
-                                    arrowSize = 8.dp,
-                                    labelColor = labelColor,
-                                    labelTextSize = 11.sp,
-                                    labelBackgroundColor = labelBgColor,
-                                ),
-                            )
-                        }
+                    val autoScale = computeAutoGraphScale(
+                        widthDp = maxWidth.value,
+                        heightDp = maxHeight.value,
+                        nodeCount = state.nodes.size,
+                    )
+                    LaunchedEffect(autoScale, state.activeMemoryId) {
+                        deponderState.submitScale(autoScale)
                     }
 
-                    val nodeCount = state.nodes.size.coerceAtLeast(1)
-                    state.nodes.forEachIndexed { index, node ->
-                        val angle = (2.0 * PI * index) / nodeCount
-                        val seedRadiusPx = 110.0
-                        val seedOffset = IntOffset(
-                            x = (cos(angle) * seedRadiusPx).roundToInt(),
-                            y = (sin(angle) * seedRadiusPx).roundToInt(),
-                        )
-                        key(node.id) {
-                            EntityCapsuleNode(
-                                node = node,
-                                isSelected = state.selectedEntity == node.id,
-                                onClick = { viewModel.selectEntity(node.id) },
-                                modifier = Modifier
-                                    .align(Alignment.Center)
-                                    .offset { seedOffset }
-                                    .deponderPlanet(
-                                        id = node.id,
-                                        physics = PlanetPhysics(
-                                            repulsionRadiusDp = 96f,
-                                            pinned = false,
-                                        ),
-                                    )
-                                    .deponderDrag(),
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .deponderRoot(deponderState),
+                    ) {
+                        state.visibleEdges.forEach { edge ->
+                            val edgeKey = if (edge.source <= edge.target) {
+                                "${edge.source}__${edge.target}"
+                            } else {
+                                "${edge.target}__${edge.source}"
+                            }
+                            val naturalLengthDp = computeAutoNaturalLengthDp(
+                                source = edge.source,
+                                target = edge.target,
+                                relation = edge.relation,
                             )
+                            key(edgeKey) {
+                                DeponderDefaultRubber(
+                                    startId = edge.source,
+                                    endId = edge.target,
+                                    label = edge.relation,
+                                    arrowMode = if (edge.bidirectional) {
+                                        DeponderArrowMode.BOTH
+                                    } else {
+                                        DeponderArrowMode.END
+                                    },
+                                    physics = RubberPhysics(
+                                        elasticity = 2.65f,
+                                        naturalLengthDp = naturalLengthDp,
+                                    ),
+                                    insets = DeponderRubberInsets.Default,
+                                    style = DeponderRubberStyle.of(
+                                        lineColor = lineColor,
+                                        lineThickness = 2.dp,
+                                        arrowSize = 8.dp,
+                                        labelColor = labelColor,
+                                        labelTextSize = 11.sp,
+                                        labelBackgroundColor = labelBgColor,
+                                    ),
+                                )
+                            }
+                        }
+
+                        val nodeCount = state.nodes.size.coerceAtLeast(1)
+                        val seedRadiusPx = with(LocalDensity.current) { 105.dp.toPx() }
+                        state.nodes.forEachIndexed { index, node ->
+                            val angle = (2.0 * PI * index) / nodeCount
+                            val seedOffset = IntOffset(
+                                x = (cos(angle) * seedRadiusPx).roundToInt(),
+                                y = (sin(angle) * seedRadiusPx).roundToInt(),
+                            )
+                            key(node.id) {
+                                EntityCapsuleNode(
+                                    node = node,
+                                    isSelected = state.selectedEntity == node.id,
+                                    onClick = { viewModel.selectEntity(node.id) },
+                                    modifier = Modifier
+                                        .align(Alignment.Center)
+                                        .offset { seedOffset }
+                                        .deponderPlanet(
+                                            id = node.id,
+                                            physics = PlanetPhysics(
+                                                repulsionRadiusDp = 190f,
+                                                elasticity = 2.25f,
+                                                pinned = false,
+                                            ),
+                                        )
+                                        .deponderDrag(),
+                                )
+                            }
                         }
                     }
                 }
@@ -288,50 +321,34 @@ fun GraphScreen(
                 }
             }
         }
-
-        // Physics Tuning Sliders
-        Surface(
-            shape = RoundedCornerShape(14.dp),
-            color = MaterialTheme.colorScheme.surface,
-            tonalElevation = 1.dp,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = String.format("缩放 %.2fx", scale),
-                        style = MaterialTheme.typography.labelMedium,
-                        modifier = Modifier.width(86.dp),
-                    )
-                    Slider(
-                        value = scale,
-                        onValueChange = {
-                            scale = it
-                            deponderState.submitScale(it)
-                        },
-                        valueRange = 0.6f..1.4f,
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = String.format("弹性 %.2f", elasticity),
-                        style = MaterialTheme.typography.labelMedium,
-                        modifier = Modifier.width(86.dp),
-                    )
-                    Slider(
-                        value = elasticity,
-                        onValueChange = {
-                            elasticity = it
-                            deponderState.submitRubberElasticity(it)
-                        },
-                        valueRange = 0.6f..3.0f,
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-            }
-        }
     }
+}
+
+private fun computeAutoGraphScale(
+    widthDp: Float,
+    heightDp: Float,
+    nodeCount: Int,
+): Float {
+    val baseByCount = when {
+        nodeCount <= 3 -> 0.95f
+        nodeCount <= 5 -> 0.86f
+        nodeCount <= 8 -> 0.78f
+        else -> 0.70f
+    }
+    val viewportFactor = (minOf(widthDp, heightDp) / 380f).coerceIn(0.85f, 1.12f)
+    return (baseByCount * viewportFactor).coerceIn(0.62f, 1.05f)
+}
+
+private fun computeAutoNaturalLengthDp(
+    source: String,
+    target: String,
+    relation: String,
+): Float {
+    val srcHalfDp = 14f + source.length * 6.5f
+    val tgtHalfDp = 14f + target.length * 6.5f
+    val labelWidthDp = 14f + relation.length * 11.5f
+    val arrowAndBreathingDp = 52f
+    return (srcHalfDp + tgtHalfDp + labelWidthDp + arrowAndBreathingDp).coerceIn(155f, 255f)
 }
 
 @Composable
@@ -359,31 +376,19 @@ private fun EntityCapsuleNode(
         ),
         shadowElevation = if (isSelected) 6.dp else 2.dp,
     ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(5.dp),
-        ) {
-            Icon(
-                imageVector = Icons.Rounded.Person,
-                contentDescription = null,
-                tint = if (isSelected) {
-                    MaterialTheme.colorScheme.onPrimary
-                } else {
-                    MaterialTheme.colorScheme.onPrimaryContainer
-                },
-                modifier = Modifier.size(14.dp),
-            )
-            Text(
-                text = node.label,
-                style = MaterialTheme.typography.labelLarge,
-                color = if (isSelected) {
-                    MaterialTheme.colorScheme.onPrimary
-                } else {
-                    MaterialTheme.colorScheme.onPrimaryContainer
-                },
-                maxLines = 1,
-            )
-        }
+        Text(
+            text = node.label,
+            style = MaterialTheme.typography.labelLarge.copy(
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium,
+            ),
+            color = if (isSelected) {
+                MaterialTheme.colorScheme.onPrimary
+            } else {
+                MaterialTheme.colorScheme.onPrimaryContainer
+            },
+            maxLines = 1,
+            modifier = Modifier.padding(horizontal = 11.dp, vertical = 6.dp),
+        )
     }
 }
