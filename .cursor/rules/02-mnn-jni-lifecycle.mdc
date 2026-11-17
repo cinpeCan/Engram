@@ -1,18 +1,19 @@
 ---
-description: Rules for C++/JNI MNN runtime safety, 16KB ELF alignment, and Native Heap lifecycle
+description: Rules for C++/JNI MNN runtime safety, 16KB ELF alignment, and RSS lifecycle
 globs: packages/edge-mnn/**/*
 alwaysApply: false
 ---
 
 # Edge MNN Native & Lifecycle Rules
 
-1. **Serial JNI Confinement**:
-   - Every call to `nativeLoadModel`, `nativeGenerateStream`, `nativeEmbed`, and `nativeRelease` MUST execute inside `MnnEngineManager` on the dedicated single-thread `mnn-jni-serial` dispatcher protected by `Mutex`.
+1. **Serial JNI Confinement & Honest Session Validation**:
+   - Every call to `createSession`, `generateStream`, and `releaseSession` MUST execute inside `MnnEngineManager` on the dedicated single-thread `mnn-jni-serial` dispatcher protected by `Mutex`.
+   - `nativeCreateSession` MUST return `0` when `ENGRAM_HAS_MNN_LIB == 0` or `config.json` is missing. Never allocate stub native sessions or allow `EngineState.Ready` without real native libraries and weights on disk.
    - Never cache raw `JNIEnv*` across threads; resolve via `JavaVM::AttachCurrentThread` only when required on background threads and detach safely.
-2. **Safe Native Cancellation & RAII**:
-   - Manage native session pointers (`jlong` handles) with explicit validity checks and `std::atomic<bool>` cancellation flags checked on every decode step.
+2. **Step-Cancelable Native Decoding & RAII**:
+   - Manage native session pointers (`jlong` handles) with explicit validity checks and `std::atomic<bool>` cancellation flags checked on every `Llm::generate(1)` decode step.
 3. **16KB Page Size Alignment**:
-   - Retain `-Wl,-z,max-page-size=16384` in `CMakeLists.txt` and `-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON` in `scripts/build_mnn_android.sh`.
-4. **Stream Coalescing & Memory Watermarks**:
+   - Retain `-Wl,-z,max-page-size=16384` in `CMakeLists.txt` and `-DCMAKE_SHARED_LINKER_FLAGS=-Wl,-z,max-page-size=16384` / `-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON` in `scripts/build_mnn_android.sh`, linking `libMNN_Express.so` when present.
+4. **Stream Coalescing & RSS Watermarks**:
    - Route high-frequency token callbacks through `TokenStreamCoalescer` (32ms window) before UI emission.
-   - Handle `ComponentCallbacks2.onTrimMemory` thresholds deterministically: `TRIM_MEMORY_UI_HIDDEN` schedules idle release; `TRIM_MEMORY_RUNNING_CRITICAL` / `TRIM_MEMORY_BACKGROUND` cancels generation and releases native weights immediately.
+   - Measure process resident memory via `/proc/self/statm` (`AndroidMemoryProvider`) and handle `ComponentCallbacks2.onTrimMemory` thresholds deterministically: `TRIM_MEMORY_UI_HIDDEN` schedules idle release; `TRIM_MEMORY_RUNNING_CRITICAL` / `TRIM_MEMORY_BACKGROUND` cancels generation and releases native weights immediately.

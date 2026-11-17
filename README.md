@@ -1,29 +1,29 @@
 # Engram (印迹)
 
 > **Privacy-First On-Device AI Memory & 2D Directed Relationship Workspace**  
-> Built as an AI-Native Monorepo combining **Alibaba MNN Edge Inference**, **White-Box Hybrid RAG**, **Human-in-the-Loop System Tools**, and **[Deponder 0.5.0](https://github.com/cinpeCan/Deponder)** 2D Physics Graphs.
+> Built as an AI-Native Monorepo combining **Alibaba MNN Edge Inference**, **Cloud SSE Structured Distillation**, **Human-in-the-Loop System Tools**, and **[Deponder 0.5.0](https://github.com/cinpeCan/Deponder)** 2D Physics Graphs inside a single-screen Material 3 workspace.
 
 ---
 
 ## Core Architecture Highlights
 
-- **Monorepo & Contract-First (`contracts/`)**: Shared JSON Schemas (`model-manifest`, `memory-analysis`, `chat-sse`) align the Kotlin Android client, `:packages:edge-mnn` C++/JNI runtime, and Python `FastAPI` gateway from a single source of truth, reinforced by root `AGENTS.md` and `.cursor/rules/*.mdc`.
-- **White-Box Memory (Jetpack Room WAL + `@Fts4` + Cosine + RRF)**:
-  - Instant local persistence across 4 relational/FTS Room tables (`memories`, `memories_fts`, `memory_embeddings`, `memory_relations`) exposed as lazy cold `Flow`s (`@Transaction` + `@Relation`) for on-demand table-tracked subscription, keeping `DataStore<Preferences>` strictly for lightweight engine configuration.
-  - Overlapping **CJK Bigram** tokenization + L2-normalized `FloatArray` `BLOB` cosine similarity fused via **Reciprocal Rank Fusion (RRF, `k=60`)**, surfacing source memory citations above every answer.
+- **Monorepo & Contract-First (`contracts/`)**: Shared JSON Schemas (`model-manifest`, `memory-analysis`, `analysis-sse`) align the Kotlin Android client, `:packages:edge-mnn` C++/JNI runtime, and Python `FastAPI` gateway from a single source of truth, reinforced by root `AGENTS.md` and `.cursor/rules/*.mdc`.
+- **Single-Screen Material 3 Workspace & In-Place Streaming Distillation**:
+  - Focused `CaptureScreen` timeline with scroll-collapsing capsule input console (`CollapsibleBottomConsoleLayout`), optical nested corner radii, and Material 3 Expressive springs.
+  - Newly captured memories stream real coalesced deltas in-place during `PENDING` state, then converge via `AnimatedContent` (with subtle haptic feedback) to distilled summaries, tags, `CalendarContract` confirmation strips, expandable raw text with copy action, and honest `AnalysisSource` telemetry badges (`MNN 0.5B`, `Cloud SSE`, or `本地规则兜底`).
+- **Two-Stage Expandable 2D Graph Sheet (`Deponder 0.5.0`)**:
+  - `BottomSheetSceneStrategy(expandable = true)` renders `GraphScreen` as a half-height (`50%`) to full-height (`92%`) stretchable Material 3 `ModalBottomSheet` with a `48dp` accessible drag/tap handle, predictive back support, and sibling canvas gesture isolation so `deponderDrag()` never triggers sheet dismissal.
+  - Anchor-driven physics & scale updates prevent per-frame drag jank and support **Streaming Growth Replay** plus node-tap entity memory citations from Room (`memories` + `memory_relations`).
 - **Koin 4.2 + Navigation 3 + Fine-Grained Stream MVI**:
-  - Uses official Koin-Nav3 integration (`koin-compose-navigation3` `navigation<T>` + `koinEntryProvider()`), per-entry `ViewModelStore` scoping (`rememberViewModelStoreNavEntryDecorator()`), and Material 3 Adaptive `ListDetailSceneStrategy` alongside `BottomSheetSceneStrategy`.
-  - Decouples high-frequency text inputs and stream turns from low-frequency controls into specific `StateFlow` streams (`combine` + `flatMapLatest` + `WhileSubscribed(5_000L)`), driven by sealed `Intent`s and `Channel`-backed one-shot `Effect`s.
-- **2D Directed Relation Graph via [`io.github.cinpecan:deponder-compose:0.5.0`](https://github.com/cinpeCan/Deponder)**:
-  - Renders extracted `(Entity A) ──relation──▶ (Entity B)` triples on a 2D force-directed plane using Material 3 rounded capsules and `DeponderDefaultRubber` springs—avoiding overlapping edge labels on mobile viewports and dropping to 0% CPU at rest.
-  - Includes **Streaming Growth Replay**, live scale/elasticity controls, and node-tap RAG citation lookup.
-- **Native Heap & Thread Safety (`:packages:edge-mnn`)**:
+  - Uses official Koin-Nav3 integration (`koin-compose-navigation3` `navigation<T>` + `koinEntryProvider()`), per-entry `ViewModelStore` scoping (`rememberViewModelStoreNavEntryDecorator()`), and `BottomSheetSceneStrategy` overlays (`GraphSheet` & `EngineSheet`).
+  - Decouples high-frequency text inputs and streaming previews from low-frequency controls into specific `StateFlow` streams, driven by sealed `Intent`s and `Channel`-backed one-shot `Effect`s.
+- **Zero-Stub Native Lifecycle & Memory Safety (`:packages:edge-mnn`)**:
   - Confines every JNI session call onto a single dedicated `mnn-jni-serial` coroutine dispatcher guarded by `Mutex`.
-  - Coalesces rapid C++ token callbacks in a **32ms tumbling window** (`TokenStreamCoalescer`) to prevent per-token Compose recomposition jank.
-  - Enforces **16KB ELF page-size alignment** (`-Wl,-z,max-page-size=16384`) and implements a `ComponentCallbacks2.onTrimMemory` unloading state machine (`Unloaded -> Loading -> Ready -> Generating -> Releasing`).
-- **Human-in-the-Loop Calendar Agent & Edge-Cloud Collaboration**:
-  - Time-bearing notes surface an explicit confirmation card before launching `CalendarContract.Events` intents.
-  - `AskScreen` toggles seamlessly between **Offline MNN Edge** and **Cloud Gateway SSE** (with automatic offline fallback when the gateway is unreachable) and displays real-time `TTFT · tok/s · Native Heap` telemetry.
+  - Refuses to enter `EngineState.Ready` without real `libMNN.so` / `libllm.so` and verified model weights on disk; runs a step-cancelable `Llm::generate(1)` decode loop piped through a **32ms tumbling window** (`TokenStreamCoalescer`).
+  - Tracks process resident memory (RSS via `/proc/self/statm`), enforces **16KB ELF page-size alignment** (`-Wl,-z,max-page-size=16384`), and implements `ComponentCallbacks2.onTrimMemory` unloading (`Unloaded -> Loading -> Ready -> Generating -> Releasing`).
+- **Honest Edge-Cloud Collaboration & Resumable Range Downloads**:
+  - `EngineBottomSheet` manages a single focused generation model (`qwen2.5-0.5b-instruct-mnn`) via `OkHttp Range + RandomAccessFile` with `.sha256` completion markers, `Content-Range` / `Content-Length` calibration, and `llm_config.json` `embedding_file` discovery.
+  - `UnifiedInferenceRouter` toggles seamlessly between **Offline MNN** and **Cloud Gateway SSE** (`/api/v1/analyze/stream`, returning HTTP `503` when `ENGRAM_CLOUD_API_KEY` is unconfigured), degrading transparently to on-device MNN or deterministic local rule extraction.
 
 ---
 
@@ -37,11 +37,11 @@ engram/
 ├── contracts/                      # Shared JSON Schemas (Draft 2020-12)
 │   ├── model-manifest.schema.json
 │   ├── memory-analysis.schema.json
-│   └── chat-sse.schema.json
+│   └── analysis-sse.schema.json
 ├── app/                            # :app Android client (Compose + Nav3 + Koin + Stream MVI + Room)
 ├── packages/
-│   └── edge-mnn/                   # :packages:edge-mnn C++/JNI MNN runtime & lifecycle guard
-├── server/                         # Python FastAPI gateway (model catalog & SSE cloud fallback)
+│   └── edge-mnn/                   # :packages:edge-mnn C++/JNI MNN runtime & RSS lifecycle guard
+├── server/                         # Python FastAPI gateway (model catalog & cloud SSE analysis)
 ├── scripts/                        # MNN Android build, model download, and dev server scripts
 └── docs/                           # Architecture specification & benchmark guide
 ```
@@ -52,7 +52,7 @@ engram/
 
 ### 1. Build & Test Android Client (Out-of-the-Box)
 
-The `:packages:edge-mnn` CMake build compiles cleanly out-of-the-box with a lightweight native JNI runtime fallback when prebuilt `libMNN.so` / `libllm.so` are not yet placed in `jniLibs/arm64-v8a/`:
+The `:packages:edge-mnn` CMake build compiles cleanly out-of-the-box (`ENGRAM_HAS_MNN_LIB=0` until prebuilt `.so` files are placed in `jniLibs/arm64-v8a/`), and `:app` transparently displays `规则兜底` when on-device weights or native MNN libraries are absent:
 
 ```bash
 ./gradlew testDebugUnitTest assembleDebug
@@ -60,14 +60,14 @@ The `:packages:edge-mnn` CMake build compiles cleanly out-of-the-box with a ligh
 
 Open the root directory directly in Android Studio and run `:app` on an emulator or `arm64-v8a` device.
 
-### 2. Optional: Enable Hardware MNN-LLM Inference & Quantized Weights
+### 2. Enable Hardware MNN-LLM Inference & Quantized Weights
 
 ```bash
 # Build alibaba/MNN arm64-v8a shared libraries with 16KB flexible page-size support
 export ANDROID_NDK=/path/to/Android/sdk/ndk/28.2.13676358
 ./scripts/build_mnn_android.sh
 
-# Fetch 4-bit Qwen2.5 MNN model weights and push to device (or download in-app)
+# Fetch 4-bit Qwen2.5-0.5B MNN model weights and push to device (or download in-app)
 python3 scripts/fetch_models.py --model-id qwen2.5-0.5b-instruct-mnn --adb-push
 ```
 

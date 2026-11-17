@@ -7,9 +7,10 @@ alwaysApply: false
 # Contract-First Cross-Stack Rules
 
 1. **Schema as Single Source of Truth**:
-   - Before adding, renaming, or removing fields in API responses, SSE frames, or structured LLM extraction JSON, update the corresponding file under `contracts/*.schema.json` first.
+   - Before adding, renaming, or removing fields in API responses (`model-manifest.schema.json`), SSE frames (`analysis-sse.schema.json`), or structured LLM extraction JSON (`memory-analysis.schema.json`), update the corresponding file under `contracts/*.schema.json` first.
 2. **Cross-Stack Verification**:
    - Server Pydantic models in `server/app/schemas.py` MUST validate against `contracts/*.schema.json` via `server/tests/test_contracts.py`.
+   - Unconfigured server keys (`ENGRAM_CLOUD_API_KEY` empty) MUST fail fast with HTTP `503` rather than returning fabricated SSE output.
    - Android `@Serializable` DTOs in `app/src/main/java/io/github/cinpecan/engram/data/remote/` MUST stay 1:1 field-compatible with `contracts/*.schema.json`.
-3. **Resilient Edge Structured Parsing**:
-   - Local quantized LLMs can emit markdown fences or minor syntax deviations around JSON; always strip fences and provide deterministic fallback extraction so UI workflows never crash on malformed model tokens.
+3. **Resilient Edge & Cloud Structured Parsing**:
+   - LLMs can emit markdown fences or minor syntax deviations around JSON; always strip fences and provide deterministic fallback extraction (`LOCAL_RULE_FALLBACK`) so UI workflows stay responsive and transparent.

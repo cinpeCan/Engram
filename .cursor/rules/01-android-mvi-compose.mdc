@@ -7,7 +7,7 @@ alwaysApply: false
 # Android MVI, Compose, Koin & Navigation 3 Rules
 
 1. **Fine-Grained Unidirectional Stream MVI**:
-   - Avoid monolithic God `UiState` objects that couple unrelated update frequencies. Split distinct UI concerns into specific unidirectional `StateFlow` streams; keep text inputs on synchronous `StateFlow<String>` decoupled from `combine` to preserve CJK IME composition.
+   - Avoid monolithic God `UiState` objects that couple unrelated update frequencies. Split distinct UI concerns into specific unidirectional `StateFlow` streams; keep text inputs and `streamingPreviews` decoupled from `combine` to preserve CJK IME composition and smooth streaming updates.
    - Aggregate dependent streams using strongly typed `combine` (zero `@Suppress("UNCHECKED_CAST")`) or `flatMapLatest`, shared lazily with `SharingStarted.WhileSubscribed(5_000L)`.
    - Expose a single `fun onIntent(intent: XxxIntent)` (`sealed interface`) per ViewModel, and emit transient side-effects (calendar intent launches, snackbars, one-off notices) strictly via a `Channel<XxxEffect>(Channel.BUFFERED).receiveAsFlow()`; never hold transient notices as unreset `StateFlow` flags.
    - Separate stateful Koin-injected `*Route` composables (which collect streams via `collectAsStateWithLifecycle()` and consume `effects`) from stateless `*Screen` composables taking pure data + `onIntent`; never subscribe to child ViewModel streams in the root workspace.
@@ -16,12 +16,13 @@ alwaysApply: false
    - Maintain a persistent `rememberNavBackStack(EngramNavKey.Capture)` back stack wrapped by an Activity-scoped `EngramNavigator` (`LocalEngramNavigator`).
    - Declare route-to-screen bindings via Koin's official `navigation<T>(metadata = ...)` DSL in `EngramModules.kt` and supply `koinEntryProvider()` to `NavDisplay`.
    - Always install `rememberSaveableStateHolderNavEntryDecorator()` and `rememberViewModelStoreNavEntryDecorator()` on `NavDisplay` so every `NavEntry` owns an isolated `ViewModelStore` that clears automatically on pop.
-   - Use Material 3 Adaptive `rememberListDetailSceneStrategy()` (`ListDetailSceneStrategy.listPane` / `detailPane`) alongside `BottomSheetSceneStrategy` for responsive single-pane / two-pane rendering instead of manual `BoxWithConstraints` pane duplication.
+   - Use `BottomSheetSceneStrategy.bottomSheet(expandable = true/false)` for modal overlays (`GraphSheet` two-stage 50%/92% sheet and `EngineSheet`), keeping `Capture` as the single-screen root workspace.
 3. **Deponder 0.5.0 Integration (`com.cinpe.deponder.*`)**:
    - Wrap each `DeponderDefaultRubber` in `key(edgeKey)` and each node in `key(node.id)` inside `Box(Modifier.deponderRoot(state))`.
    - Enforce deduplicated node IDs, zero self-loops, and single merged edge per unordered pair `(a, b)`.
-   - Never mutate layout constraints or move Compose physics/gesture state into ViewModel MVI reducers.
+   - Isolate empty-canvas drags via a background sibling pointer consumer and `NestedScrollConnection` so `ModalBottomSheet` does not dismiss accidentally during graph interaction.
+   - Never mutate layout constraints per drag frame or move Compose physics/gesture state into ViewModel MVI reducers.
 4. **Storage Boundaries (`Jetpack Room` & `DataStore`)**:
-   - Persist memories, FTS4 tokens, float vectors, and relation triples exclusively in `EngramDatabase` / `RoomMemoryStore` via cold `Flow`s in `MemoryDao` (`@Transaction`, `WAL`, `@Fts4`, `@Relation`) for on-demand table-tracked invalidation.
-   - Never update `MemoryEntity` analysis fields with `@Insert(onConflict = REPLACE)`, which deletes rows and cascades to child tables; use targeted `@Query("UPDATE ...")` mutations.
+   - Persist memories, relation triples, `analysisSource`, and `telemetryBadge` exclusively in `EngramDatabase` / `RoomMemoryStore` via cold `Flow`s in `MemoryDao` (`@Transaction`, `WAL`, `@Relation`) for on-demand table-tracked invalidation.
+   - Never update `MemoryEntity` analysis fields with `@Insert(onConflict = REPLACE)`, which deletes rows and cascades to `memory_relations`; use targeted `@Query("UPDATE ...")` mutations.
    - Use `DataStore<Preferences>` solely for lightweight configuration switches (inference mode, selected model ID, server base URL).
