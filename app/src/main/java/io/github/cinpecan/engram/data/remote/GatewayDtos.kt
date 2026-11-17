@@ -9,7 +9,7 @@ data class ModelFileDto(
     val name: String,
     val url: String,
     val sizeBytes: Long,
-    val sha256: String,
+    val sha256: String? = null,
 )
 
 @Immutable
@@ -23,7 +23,7 @@ data class ModelDescriptorDto(
     val minRamMb: Int,
     val downloadUrl: String,
     val mirrorUrl: String,
-    val sha256: String,
+    val sha256: String? = null,
     val description: String? = null,
     val files: List<ModelFileDto>,
 )
@@ -35,23 +35,17 @@ data class ModelManifestResponseDto(
 )
 
 @Serializable
-data class CitationItemDto(
-    val memoryId: String,
+data class AnalysisStreamRequestDto(
     val content: String,
+    val nowIso: String,
+    val model: String = "gpt-4o-mini",
 )
 
 @Serializable
-data class ChatStreamRequestDto(
-    val query: String,
-    val citations: List<CitationItemDto>,
-    val model: String = "engram-cloud-fallback",
-    val stream: Boolean = true,
-)
-
-@Serializable
-data class ChatStreamChunkDto(
+data class AnalysisStreamChunkDto(
     val delta: String,
     val done: Boolean,
     val model: String,
     val latencyMs: Long,
+    val error: String? = null,
 )

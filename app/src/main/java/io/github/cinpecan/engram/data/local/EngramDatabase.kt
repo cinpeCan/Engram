@@ -9,10 +9,8 @@ import androidx.room.RoomDatabase
     entities = [
         MemoryEntity::class,
         MemoryRelationEntity::class,
-        MemoryEmbeddingEntity::class,
-        MemoryFtsEntity::class,
     ],
-    version = 1,
+    version = 2,
     exportSchema = false,
 )
 abstract class EngramDatabase : RoomDatabase() {
@@ -28,6 +26,7 @@ abstract class EngramDatabase : RoomDatabase() {
                 DB_NAME,
             )
                 .setJournalMode(JournalMode.WRITE_AHEAD_LOGGING)
+                .fallbackToDestructiveMigration(dropAllTables = true)
                 .build()
     }
 }

@@ -1,13 +1,12 @@
 package io.github.cinpecan.engram.data.local
 
 import androidx.room.withTransaction
+import io.github.cinpecan.engram.domain.model.AnalysisSource
 import io.github.cinpecan.engram.domain.model.CalendarProposal
 import io.github.cinpecan.engram.domain.model.MemoryAnalysisPayload
 import io.github.cinpecan.engram.domain.model.MemoryAnalysisStatus
 import io.github.cinpecan.engram.domain.model.MemoryItem
 import io.github.cinpecan.engram.domain.model.RelationTriple
-import io.github.cinpecan.engram.domain.rag.CjkBigramTokenizer
-import io.github.cinpecan.engram.domain.rag.VectorMath
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -16,7 +15,7 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
 /**
- * Local Single Source of Truth (SSOT) backed by Jetpack Room (WAL + FTS4 CJK bigrams + BLOB vectors)
+ * Local Single Source of Truth (SSOT) backed by Jetpack Room (WAL + @Relation)
  * exposing cold table-tracked [Flow]s for on-demand subscription.
  */
 class RoomMemoryStore(
@@ -47,18 +46,11 @@ class RoomMemoryStore(
                         analysisStatus = item.analysisStatus.name,
                         calendarJson = item.calendarProposal?.let { json.encodeToString(it) },
                         calendarSaved = item.calendarSaved,
+                        analysisSource = item.analysisSource.name,
+                        telemetryBadge = item.telemetryBadge,
                     ),
                 )
                 replaceRelations(item.id, item.relations)
-                replaceFtsEntry(
-                    memoryId = item.id,
-                    searchableText = buildSearchableText(
-                        content = item.content,
-                        summary = item.summary,
-                        tags = item.tags,
-                        relations = item.relations,
-                    ),
-                )
             }
         }
     }
@@ -66,7 +58,8 @@ class RoomMemoryStore(
     override suspend fun updateMemoryAnalysis(
         memoryId: String,
         payload: MemoryAnalysisPayload,
-        embedding: FloatArray?,
+        analysisSource: AnalysisSource,
+        telemetryBadge: String,
     ) {
         withContext(Dispatchers.IO) {
             db.withTransaction {
@@ -78,6 +71,8 @@ class RoomMemoryStore(
                         tagsJson = json.encodeToString(payload.tags),
                         status = MemoryAnalysisStatus.READY.name,
                         calendarJson = payload.calendarProposal?.let { json.encodeToString(it) },
+                        analysisSource = analysisSource.name,
+                        telemetryBadge = telemetryBadge,
                     )
                     val normalizedRelations = payload.relations.mapIndexed { idx, rel ->
                         rel.copy(
@@ -86,26 +81,6 @@ class RoomMemoryStore(
                         )
                     }
                     replaceRelations(memoryId, normalizedRelations)
-                    replaceFtsEntry(
-                        memoryId = memoryId,
-                        searchableText = buildSearchableText(
-                            content = content,
-                            summary = payload.summary,
-                            tags = payload.tags,
-                            relations = normalizedRelations,
-                        ),
-                    )
-                }
-
-                if (embedding != null && embedding.isNotEmpty()) {
-                    val normalizedVec = VectorMath.l2Normalize(embedding)
-                    dao.upsertEmbedding(
-                        MemoryEmbeddingEntity(
-                            memoryId = memoryId,
-                            dims = normalizedVec.size,
-                            vectorBlob = VectorMath.toByteArray(normalizedVec),
-                        ),
-                    )
                 }
             }
         }
@@ -119,31 +94,6 @@ class RoomMemoryStore(
 
     override suspend fun getAllMemories(): List<MemoryItem> = withContext(Dispatchers.IO) {
         dao.getAllMemories().map { it.toDomain() }
-    }
-
-    override suspend fun queryFtsLexicalIds(query: String): List<String> = withContext(Dispatchers.IO) {
-        val matchExpr = CjkBigramTokenizer.buildFts4MatchExpression(query) ?: return@withContext emptyList()
-        val queryTokens = CjkBigramTokenizer.tokenizeQuery(query)
-        val rows = runCatching { dao.queryFtsHits(matchExpr) }.getOrElse { emptyList() }
-        rows
-            .map { hit ->
-                val overlapScore = queryTokens.count { qt -> hit.bigramTokens.contains(qt) }
-                hit.memoryId to overlapScore
-            }
-            .sortedByDescending { it.second }
-            .map { it.first }
-    }
-
-    override suspend fun loadAllEmbeddings(): Map<String, FloatArray> = withContext(Dispatchers.IO) {
-        val entities = dao.getAllEmbeddings()
-        val result = HashMap<String, FloatArray>(entities.size)
-        for (entity in entities) {
-            val vec = VectorMath.toFloatArray(entity.vectorBlob)
-            if (vec.isNotEmpty()) {
-                result[entity.memoryId] = vec
-            }
-        }
-        result
     }
 
     override suspend fun countMemories(): Int = withContext(Dispatchers.IO) {
@@ -171,24 +121,13 @@ class RoomMemoryStore(
         }
     }
 
-    private suspend fun replaceFtsEntry(
-        memoryId: String,
-        searchableText: String,
-    ) {
-        dao.deleteFtsForMemory(memoryId)
-        dao.insertFts(
-            MemoryFtsEntity(
-                memoryId = memoryId,
-                bigramTokens = CjkBigramTokenizer.tokenizeForIndex(searchableText),
-            ),
-        )
-    }
-
     private fun MemoryWithRelations.toDomain(): MemoryItem {
         val tags = runCatching { json.decodeFromString<List<String>>(memory.tagsJson) }
             .getOrDefault(emptyList())
         val status = runCatching { MemoryAnalysisStatus.valueOf(memory.analysisStatus) }
             .getOrDefault(MemoryAnalysisStatus.PENDING)
+        val source = runCatching { AnalysisSource.valueOf(memory.analysisSource) }
+            .getOrDefault(AnalysisSource.LOCAL_RULE_FALLBACK)
         val calendarProposal = memory.calendarJson?.let { raw ->
             runCatching { json.decodeFromString<CalendarProposal>(raw) }.getOrNull()
         }
@@ -211,21 +150,8 @@ class RoomMemoryStore(
                     bidirectional = rel.bidirectional,
                 )
             },
+            analysisSource = source,
+            telemetryBadge = memory.telemetryBadge,
         )
-    }
-
-    private fun buildSearchableText(
-        content: String,
-        summary: String,
-        tags: List<String>,
-        relations: List<RelationTriple>,
-    ): String {
-        val sb = StringBuilder(content)
-        if (summary.isNotBlank()) sb.append(' ').append(summary)
-        if (tags.isNotEmpty()) sb.append(' ').append(tags.joinToString(" "))
-        relations.forEach { rel ->
-            sb.append(' ').append(rel.source).append(' ').append(rel.relation).append(' ').append(rel.target)
-        }
-        return sb.toString()
     }
 }

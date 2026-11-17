@@ -16,9 +16,12 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.Call
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.Response
 
 sealed interface ModelDownloadState {
     data object Idle : ModelDownloadState
@@ -37,7 +40,8 @@ sealed interface ModelDownloadState {
 }
 
 /**
- * Resumable HTTP Range downloader backed by [RandomAccessFile] and streaming SHA-256 verification.
+ * Resumable HTTP Range downloader backed by [RandomAccessFile], header-calibrated byte progress,
+ * and SHA-256 verification with `.sha256` completion markers.
  */
 class ModelDownloadManager internal constructor(
     private val primaryModelsDir: File,
@@ -75,9 +79,14 @@ class ModelDownloadManager internal constructor(
         for (model in _catalog.value) {
             val dir = resolveExistingModelDir(model)
             if (dir != null) {
+                val mainFile = model.files.lastOrNull()?.name ?: "llm.mnn.weight"
+                val marker = File(dir, "$mainFile.sha256")
+                val digest = runCatching { marker.takeIf { it.exists() }?.readText()?.trim() }
+                    .getOrNull()
+                    .orEmpty()
                 updates[model.id] = ModelDownloadState.Completed(
                     localDirPath = dir.absolutePath,
-                    verifiedSha256 = model.sha256,
+                    verifiedSha256 = digest,
                 )
             }
         }
@@ -109,7 +118,42 @@ class ModelDownloadManager internal constructor(
             externalModelsDir?.let { File(it, model.id) },
         )
         return candidates.firstOrNull { dir ->
-            dir.exists() && model.files.all { file -> File(dir, file.name).exists() }
+            if (!dir.exists()) return@firstOrNull false
+            if (!model.files.all { file -> isFileComplete(dir, file) }) return@firstOrNull false
+            val embedFile = parseEmbeddingFileName(File(dir, "llm_config.json"))
+            if (embedFile != null && model.files.none { it.name == embedFile }) {
+                val target = File(dir, embedFile)
+                val part = File(dir, "$embedFile.part")
+                target.exists() && target.length() > 0L && !part.exists()
+            } else {
+                true
+            }
+        }
+    }
+
+    private fun isFileComplete(dir: File, spec: ModelFileDto): Boolean {
+        val finalFile = File(dir, spec.name)
+        val partFile = File(dir, "${spec.name}.part")
+        val markerFile = File(dir, "${spec.name}.sha256")
+
+        if (!finalFile.exists() || partFile.exists()) return false
+
+        if (markerFile.exists()) {
+            val recorded = runCatching { markerFile.readText().trim() }.getOrDefault("")
+            if (recorded.length != 64 || finalFile.length() <= 0L) return false
+            if (spec.sha256 != null && recorded != spec.sha256) return false
+            return true
+        }
+
+        // Fallback verification for externally pushed bundles (`adb push`)
+        if (spec.sha256 != null) {
+            return computeSha256(finalFile) == spec.sha256
+        }
+        return if (spec.name.endsWith(".json", ignoreCase = true)) {
+            finalFile.length() > 0L
+        } else {
+            val minExpected = (spec.sizeBytes * 0.9).toLong().coerceAtLeast(1L)
+            finalFile.length() >= minExpected
         }
     }
 
@@ -119,88 +163,158 @@ class ModelDownloadManager internal constructor(
             val targetDir = resolveModelDirectory(model.id)
             targetDir.mkdirs()
 
-            val totalBytes = model.files.sumOf { it.sizeBytes }.coerceAtLeast(model.sizeBytes)
+            val pendingSpecs = model.files.toMutableList()
+            val knownFileSizes = model.files.associate { it.name to it.sizeBytes }.toMutableMap()
             var cumulativeDone = 0L
+
+            fun totalKnownBytes(): Long =
+                knownFileSizes.values.sum().coerceAtLeast(model.sizeBytes).coerceAtLeast(1L)
 
             try {
                 var lastDigestHex = ""
-                for (fileSpec in model.files) {
+                var idx = 0
+                while (idx < pendingSpecs.size) {
+                    val fileSpec = pendingSpecs[idx]
+                    idx++
+
                     val finalFile = File(targetDir, fileSpec.name)
-                    val alreadyComplete = finalFile.exists() && (
-                        (fileSpec.sha256 == UNPINNED_SHA256 && finalFile.length() > 0L) ||
-                            finalFile.length() == fileSpec.sizeBytes
-                        )
-                    if (alreadyComplete) {
-                        cumulativeDone += finalFile.length()
+                    if (isFileComplete(targetDir, fileSpec)) {
+                        val len = finalFile.length()
+                        knownFileSizes[fileSpec.name] = len
+                        cumulativeDone += len
                         _downloadStates.update {
-                            it + (model.id to ModelDownloadState.Downloading(cumulativeDone.coerceAtMost(totalBytes), totalBytes, fileSpec.name))
+                            it + (
+                                model.id to ModelDownloadState.Downloading(
+                                    bytesRead = cumulativeDone.coerceAtMost(totalKnownBytes()),
+                                    totalBytes = totalKnownBytes(),
+                                    currentFileName = fileSpec.name,
+                                )
+                                )
                         }
-                        lastDigestHex = computeSha256(finalFile)
+                        val markerFile = File(targetDir, "${fileSpec.name}.sha256")
+                        lastDigestHex = if (markerFile.exists()) {
+                            markerFile.readText().trim()
+                        } else {
+                            computeSha256(finalFile).also { markerFile.writeText(it) }
+                        }
+                        enqueueEmbeddingIfDeclared(fileSpec, finalFile, pendingSpecs, knownFileSizes)
                         continue
                     }
 
                     val partFile = File(targetDir, "${fileSpec.name}.part")
-                    val existingBytes = if (partFile.exists()) partFile.length() else 0L
-                    val requestBuilder = Request.Builder().url(fileSpec.url)
-                    if (existingBytes > 0L) {
-                        requestBuilder.header("Range", "bytes=$existingBytes-")
-                    }
+                    var existingBytes = if (partFile.exists()) partFile.length() else 0L
+                    var forceFresh = false
 
-                    val call = okHttpClient.newCall(requestBuilder.build())
-                    activeCalls[model.id] = call
-
-                    call.execute().use { response ->
-                        if (!response.isSuccessful && response.code != 206) {
-                            error("HTTP ${response.code} downloading ${fileSpec.name}")
+                    while (true) {
+                        val requestBuilder = Request.Builder().url(fileSpec.url)
+                        if (existingBytes > 0L && !forceFresh) {
+                            requestBuilder.header("Range", "bytes=$existingBytes-")
                         }
-                        val appendMode = response.code == 206 && existingBytes > 0L
-                        val body = response.body ?: error("Empty body for ${fileSpec.name}")
-                        val buffer = ByteArray(16 * 1024)
-                        var fileWritten = if (appendMode) existingBytes else 0L
 
-                        RandomAccessFile(partFile, "rw").use { raf ->
-                            if (appendMode) {
-                                raf.seek(existingBytes)
-                            } else {
-                                raf.setLength(0L)
+                        val call = okHttpClient.newCall(requestBuilder.build())
+                        activeCalls[model.id] = call
+
+                        var retryFresh = false
+                        call.execute().use { response ->
+                            if (response.code == 416 && existingBytes > 0L) {
+                                val rangeTotal = parseContentRangeTotal(response)
+                                if (rangeTotal != null && existingBytes == rangeTotal) {
+                                    knownFileSizes[fileSpec.name] = rangeTotal
+                                    finalizeCompletedPart(partFile, finalFile, fileSpec)?.let { lastDigestHex = it }
+                                    cumulativeDone += finalFile.length()
+                                    enqueueEmbeddingIfDeclared(fileSpec, finalFile, pendingSpecs, knownFileSizes)
+                                    break
+                                }
+                                partFile.delete()
+                                existingBytes = 0L
+                                forceFresh = true
+                                retryFresh = true
+                                return@use
                             }
-                            body.byteStream().use { input ->
-                                while (isActive) {
-                                    val read = input.read(buffer)
-                                    if (read == -1) break
-                                    raf.write(buffer, 0, read)
-                                    fileWritten += read
-                                    _downloadStates.update {
-                                        it + (
-                                            model.id to ModelDownloadState.Downloading(
-                                                bytesRead = (cumulativeDone + fileWritten).coerceAtMost(totalBytes),
-                                                totalBytes = totalBytes,
-                                                currentFileName = fileSpec.name,
-                                            )
-                                            )
+
+                            if (!response.isSuccessful && response.code != 206) {
+                                error("HTTP ${response.code} downloading ${fileSpec.name}")
+                            }
+
+                            val appendMode = response.code == 206 && existingBytes > 0L
+                            val body = response.body ?: error("Empty body for ${fileSpec.name}")
+                            val expectedFileBytes = resolveExpectedFileBytes(
+                                response = response,
+                                appendMode = appendMode,
+                                existingBytes = existingBytes,
+                                bodyContentLength = body.contentLength(),
+                            )
+                            if (expectedFileBytes != null && expectedFileBytes > 0L) {
+                                knownFileSizes[fileSpec.name] = expectedFileBytes
+                            }
+
+                            val buffer = ByteArray(16 * 1024)
+                            var fileWritten = if (appendMode) existingBytes else 0L
+                            var lastEmittedBytes = -1L
+
+                            RandomAccessFile(partFile, "rw").use { raf ->
+                                if (appendMode) {
+                                    raf.seek(existingBytes)
+                                } else {
+                                    raf.setLength(0L)
+                                }
+                                body.byteStream().use { input ->
+                                    while (isActive) {
+                                        val read = input.read(buffer)
+                                        if (read == -1) break
+                                        raf.write(buffer, 0, read)
+                                        fileWritten += read
+                                        if (lastEmittedBytes < 0L || fileWritten - lastEmittedBytes >= 64 * 1024) {
+                                            lastEmittedBytes = fileWritten
+                                            val totalNow = totalKnownBytes()
+                                            _downloadStates.update {
+                                                it + (
+                                                    model.id to ModelDownloadState.Downloading(
+                                                        bytesRead = (cumulativeDone + fileWritten).coerceAtMost(totalNow),
+                                                        totalBytes = totalNow,
+                                                        currentFileName = fileSpec.name,
+                                                    )
+                                                    )
+                                            }
+                                        }
                                     }
                                 }
                             }
-                        }
-                        if (!isActive) {
-                            _downloadStates.update {
-                                it + (model.id to ModelDownloadState.Paused(cumulativeDone + fileWritten, totalBytes))
-                            }
-                            return@launch
-                        }
-                    }
 
-                    val digest = computeSha256(partFile)
-                    if (fileSpec.sha256 != UNPINNED_SHA256 && digest != fileSpec.sha256) {
-                        partFile.delete()
-                        error("SHA-256 mismatch for ${fileSpec.name}")
+                            if (!isActive) {
+                                _downloadStates.update {
+                                    it + (
+                                        model.id to ModelDownloadState.Paused(
+                                            bytesRead = cumulativeDone + fileWritten,
+                                            totalBytes = totalKnownBytes(),
+                                        )
+                                        )
+                                }
+                                return@launch
+                            }
+
+                            if (expectedFileBytes != null && expectedFileBytes > 0L && fileWritten != expectedFileBytes) {
+                                error("文件 ${fileSpec.name} 下载未完整 ($fileWritten/$expectedFileBytes)")
+                            }
+
+                            lastDigestHex = finalizeCompletedPart(partFile, finalFile, fileSpec)
+                                ?: lastDigestHex
+                            val totalNow = totalKnownBytes()
+                            cumulativeDone += finalFile.length()
+                            _downloadStates.update {
+                                it + (
+                                    model.id to ModelDownloadState.Downloading(
+                                        bytesRead = cumulativeDone.coerceAtMost(totalNow),
+                                        totalBytes = totalNow,
+                                        currentFileName = fileSpec.name,
+                                    )
+                                    )
+                            }
+                            enqueueEmbeddingIfDeclared(fileSpec, finalFile, pendingSpecs, knownFileSizes)
+                        }
+
+                        if (!retryFresh) break
                     }
-                    if (!partFile.renameTo(finalFile)) {
-                        partFile.copyTo(finalFile, overwrite = true)
-                        partFile.delete()
-                    }
-                    lastDigestHex = digest
-                    cumulativeDone += finalFile.length()
                 }
 
                 _downloadStates.update {
@@ -232,6 +346,75 @@ class ModelDownloadManager internal constructor(
         activeJobs.remove(modelId)?.cancel()
     }
 
+    private fun finalizeCompletedPart(
+        partFile: File,
+        finalFile: File,
+        fileSpec: ModelFileDto,
+    ): String? {
+        val digest = computeSha256(partFile)
+        if (fileSpec.sha256 != null && digest != fileSpec.sha256) {
+            partFile.delete()
+            error("SHA-256 校验失败：${fileSpec.name}")
+        }
+        if (finalFile.exists()) {
+            finalFile.delete()
+        }
+        if (!partFile.renameTo(finalFile)) {
+            partFile.copyTo(finalFile, overwrite = true)
+            partFile.delete()
+        }
+        File(finalFile.parentFile, "${fileSpec.name}.sha256").writeText(digest)
+        return digest
+    }
+
+    private fun enqueueEmbeddingIfDeclared(
+        fileSpec: ModelFileDto,
+        finalFile: File,
+        pendingSpecs: MutableList<ModelFileDto>,
+        knownFileSizes: MutableMap<String, Long>,
+    ) {
+        if (fileSpec.name != "llm_config.json") return
+        val embedFile = parseEmbeddingFileName(finalFile) ?: return
+        if (pendingSpecs.any { it.name == embedFile }) return
+        val baseUrl = fileSpec.url.substringBeforeLast('/')
+        pendingSpecs.add(
+            ModelFileDto(
+                name = embedFile,
+                url = "$baseUrl/$embedFile",
+                sizeBytes = 1L,
+                sha256 = null,
+            ),
+        )
+        knownFileSizes[embedFile] = 1L
+    }
+
+    private fun parseEmbeddingFileName(llmConfigFile: File): String? {
+        if (!llmConfigFile.exists()) return null
+        return runCatching {
+            val obj = json.parseToJsonElement(llmConfigFile.readText()).jsonObject
+            obj["embedding_file"]?.jsonPrimitive?.content?.trim()?.takeIf { it.isNotEmpty() }
+        }.getOrNull()
+    }
+
+    private fun resolveExpectedFileBytes(
+        response: Response,
+        appendMode: Boolean,
+        existingBytes: Long,
+        bodyContentLength: Long,
+    ): Long? {
+        if (response.code == 206) {
+            parseContentRangeTotal(response)?.let { return it }
+            return if (bodyContentLength > 0L) existingBytes + bodyContentLength else null
+        }
+        return if (!appendMode && bodyContentLength > 0L) bodyContentLength else null
+    }
+
+    private fun parseContentRangeTotal(response: Response): Long? {
+        val header = response.header("Content-Range") ?: return null
+        val totalPart = header.substringAfterLast('/', missingDelimiterValue = "").trim()
+        return totalPart.toLongOrNull()?.takeIf { it > 0L }
+    }
+
     private fun computeSha256(file: File): String {
         val digest = MessageDigest.getInstance("SHA-256")
         val buf = ByteArray(16 * 1024)
@@ -246,8 +429,6 @@ class ModelDownloadManager internal constructor(
     }
 
     companion object {
-        private val UNPINNED_SHA256 = "0".repeat(64)
-
         fun builtInCatalog(): List<ModelDescriptorDto> = listOf(
             ModelDescriptorDto(
                 id = "qwen2.5-0.5b-instruct-mnn",
@@ -258,49 +439,14 @@ class ModelDownloadManager internal constructor(
                 minRamMb = 2048,
                 downloadUrl = "https://huggingface.co/taobao-mnn/Qwen2.5-0.5B-Instruct-MNN/resolve/main/llm.mnn.weight",
                 mirrorUrl = "https://modelscope.cn/models/MNN/Qwen2.5-0.5B-Instruct-MNN/resolve/master/llm.mnn.weight",
-                sha256 = UNPINNED_SHA256,
-                description = "轻量端侧推理首选，支持离线结构化提取与 RAG 问答。",
+                sha256 = null,
+                description = "端侧离线推理核心模型，支持流式结构化摘要、日程提议与 2D 关系脉络抽取。",
                 files = listOf(
-                    ModelFileDto("config.json", "https://modelscope.cn/models/MNN/Qwen2.5-0.5B-Instruct-MNN/resolve/master/config.json", 624L, UNPINNED_SHA256),
-                    ModelFileDto("llm_config.json", "https://modelscope.cn/models/MNN/Qwen2.5-0.5B-Instruct-MNN/resolve/master/llm_config.json", 780L, UNPINNED_SHA256),
-                    ModelFileDto("tokenizer.txt", "https://modelscope.cn/models/MNN/Qwen2.5-0.5B-Instruct-MNN/resolve/master/tokenizer.txt", 2_450_000L, UNPINNED_SHA256),
-                    ModelFileDto("llm.mnn", "https://modelscope.cn/models/MNN/Qwen2.5-0.5B-Instruct-MNN/resolve/master/llm.mnn", 4_200_000L, UNPINNED_SHA256),
-                    ModelFileDto("llm.mnn.weight", "https://modelscope.cn/models/MNN/Qwen2.5-0.5B-Instruct-MNN/resolve/master/llm.mnn.weight", 391_807_476L, UNPINNED_SHA256),
-                ),
-            ),
-            ModelDescriptorDto(
-                id = "qwen2.5-1.5b-instruct-mnn",
-                name = "Qwen2.5-1.5B Instruct (MNN INT4)",
-                role = "generation",
-                quantization = "INT4",
-                sizeBytes = 1_027_604_480L,
-                minRamMb = 4096,
-                downloadUrl = "https://huggingface.co/taobao-mnn/Qwen2.5-1.5B-Instruct-MNN/resolve/main/llm.mnn.weight",
-                mirrorUrl = "https://modelscope.cn/models/MNN/Qwen2.5-1.5B-Instruct-MNN/resolve/master/llm.mnn.weight",
-                sha256 = UNPINNED_SHA256,
-                description = "主力高质量端侧模型，适合复杂关系脉络抽取。",
-                files = listOf(
-                    ModelFileDto("config.json", "https://modelscope.cn/models/MNN/Qwen2.5-1.5B-Instruct-MNN/resolve/master/config.json", 640L, UNPINNED_SHA256),
-                    ModelFileDto("llm_config.json", "https://modelscope.cn/models/MNN/Qwen2.5-1.5B-Instruct-MNN/resolve/master/llm_config.json", 812L, UNPINNED_SHA256),
-                    ModelFileDto("tokenizer.txt", "https://modelscope.cn/models/MNN/Qwen2.5-1.5B-Instruct-MNN/resolve/master/tokenizer.txt", 2_450_000L, UNPINNED_SHA256),
-                    ModelFileDto("llm.mnn", "https://modelscope.cn/models/MNN/Qwen2.5-1.5B-Instruct-MNN/resolve/master/llm.mnn", 6_153_028L, UNPINNED_SHA256),
-                    ModelFileDto("llm.mnn.weight", "https://modelscope.cn/models/MNN/Qwen2.5-1.5B-Instruct-MNN/resolve/master/llm.mnn.weight", 1_019_000_000L, UNPINNED_SHA256),
-                ),
-            ),
-            ModelDescriptorDto(
-                id = "gte-multilingual-base-mnn",
-                name = "GTE Multilingual Base (MNN Embedding)",
-                role = "embedding",
-                quantization = "INT8",
-                sizeBytes = 167_772_160L,
-                minRamMb = 1024,
-                downloadUrl = "https://huggingface.co/taobao-mnn/gte_sentence-embedding_multilingual-base-MNN/resolve/main/model.mnn.weight",
-                mirrorUrl = "https://modelscope.cn/models/MNN/gte_sentence-embedding_multilingual-base-MNN/resolve/master/model.mnn.weight",
-                sha256 = UNPINNED_SHA256,
-                description = "中英双语本地句向量模型，支撑本地混合 RAG 语义召回。",
-                files = listOf(
-                    ModelFileDto("model.mnn", "https://modelscope.cn/models/MNN/gte_sentence-embedding_multilingual-base-MNN/resolve/master/model.mnn", 1_772_160L, UNPINNED_SHA256),
-                    ModelFileDto("model.mnn.weight", "https://modelscope.cn/models/MNN/gte_sentence-embedding_multilingual-base-MNN/resolve/master/model.mnn.weight", 166_000_000L, UNPINNED_SHA256),
+                    ModelFileDto("config.json", "https://modelscope.cn/models/MNN/Qwen2.5-0.5B-Instruct-MNN/resolve/master/config.json", 624L, null),
+                    ModelFileDto("llm_config.json", "https://modelscope.cn/models/MNN/Qwen2.5-0.5B-Instruct-MNN/resolve/master/llm_config.json", 780L, null),
+                    ModelFileDto("tokenizer.txt", "https://modelscope.cn/models/MNN/Qwen2.5-0.5B-Instruct-MNN/resolve/master/tokenizer.txt", 2_450_000L, null),
+                    ModelFileDto("llm.mnn", "https://modelscope.cn/models/MNN/Qwen2.5-0.5B-Instruct-MNN/resolve/master/llm.mnn", 4_200_000L, null),
+                    ModelFileDto("llm.mnn.weight", "https://modelscope.cn/models/MNN/Qwen2.5-0.5B-Instruct-MNN/resolve/master/llm.mnn.weight", 391_807_476L, null),
                 ),
             ),
         )

@@ -1,12 +1,9 @@
 package io.github.cinpecan.engram.data.repository
 
-import io.github.cinpecan.engram.data.local.LocalMemoryStore
 import io.github.cinpecan.engram.data.remote.CloudSseClient
 import io.github.cinpecan.engram.domain.analyzer.MemoryAnalyzer
+import io.github.cinpecan.engram.domain.model.AnalysisSource
 import io.github.cinpecan.engram.domain.model.InferenceMode
-import io.github.cinpecan.engram.domain.model.MemoryAnalysisPayload
-import io.github.cinpecan.engram.domain.model.MemoryAnalysisStatus
-import io.github.cinpecan.engram.domain.model.MemoryItem
 import io.github.cinpecan.engram.edgemnn.EdgeAiEngine
 import io.github.cinpecan.engram.edgemnn.EngineState
 import io.github.cinpecan.engram.edgemnn.InferenceTelemetry
@@ -16,101 +13,164 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
+import okhttp3.Protocol
+import okhttp3.Response
+import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class UnifiedInferenceRouterTest {
 
-    private class FakeLocalStore(initial: List<MemoryItem>) : LocalMemoryStore {
-        private val items = MutableStateFlow(initial)
-
-        override fun observeMemories(): Flow<List<MemoryItem>> = items
-
-        override fun observeMemoryById(memoryId: String): Flow<MemoryItem?> =
-            items.map { list -> list.firstOrNull { it.id == memoryId } }
-
-        override fun observeMemoriesForEntity(entityName: String): Flow<List<MemoryItem>> =
-            items.map { list ->
-                list.filter { item ->
-                    item.content.contains(entityName, ignoreCase = true) ||
-                        item.relations.any { it.source == entityName || it.target == entityName }
-                }
-            }
-
-        override suspend fun insertRawMemory(item: MemoryItem) {
-            items.value = listOf(item) + items.value
-        }
-
-        override suspend fun updateMemoryAnalysis(
-            memoryId: String,
-            payload: MemoryAnalysisPayload,
-            embedding: FloatArray?,
-        ) = Unit
-
-        override suspend fun markCalendarSaved(memoryId: String) = Unit
-        override suspend fun getAllMemories(): List<MemoryItem> = items.value
-        override suspend fun queryFtsLexicalIds(query: String): List<String> = items.value.map { it.id }
-        override suspend fun loadAllEmbeddings(): Map<String, FloatArray> =
-            items.value.associate { it.id to FloatArray(16) { idx -> if (idx == 0) 1f else 0f } }
-        override suspend fun countMemories(): Int = items.value.size
-    }
-
-    private class FakeEdgeEngine : EdgeAiEngine {
-        var lastPrompt: String = ""
-        override val state: StateFlow<EngineState> = MutableStateFlow(EngineState.Ready("qwen", "MNN", 256L))
+    private class FakeEdgeEngine(
+        override val isBackendAvailable: Boolean,
+        initialState: EngineState,
+        private val emittedJson: String? = null,
+    ) : EdgeAiEngine {
+        var generateCalled = false
+        override val state: StateFlow<EngineState> = MutableStateFlow(initialState)
         override val lastTelemetry: StateFlow<InferenceTelemetry?> = MutableStateFlow(null)
+
         override suspend fun loadModel(modelId: String, modelDirPath: String) = Result.success(Unit)
+
         override fun streamGenerate(prompt: String, maxTokens: Int): Flow<StreamChunk> = flow {
-            lastPrompt = prompt
-            emit(StreamChunk.Delta("密码是 Admin@9527"))
+            generateCalled = true
+            val text = emittedJson ?: error("No MNN model loaded")
+            val mid = text.length / 2
+            emit(StreamChunk.Delta(text.substring(0, mid)))
+            emit(StreamChunk.Delta(text.substring(mid)))
             emit(
                 StreamChunk.Completed(
-                    fullText = "密码是 Admin@9527",
-                    telemetry = InferenceTelemetry("MNN Edge Runtime", "qwen", 15, 30, 6, 200.0, 256.0, false),
+                    fullText = text,
+                    telemetry = InferenceTelemetry(
+                        engineLabel = "MNN-LLM (ARM64)",
+                        modelId = "qwen2.5-0.5b-instruct-mnn",
+                        ttftMs = 140L,
+                        totalMs = 400L,
+                        generatedTokens = 12,
+                        tokensPerSec = 30.0,
+                        residentMemoryMb = 412.0,
+                        isRealMnn = true,
+                    ),
                 ),
             )
         }
-        override suspend fun embedText(text: String, dims: Int) = FloatArray(dims) { if (it == 0) 1f else 0f }
+
         override suspend fun unload(reason: UnloadReason): Long = 0L
         override fun cancelActiveGeneration() = Unit
         override fun onTrimMemory(level: Int) = Unit
-        override fun currentNativeHeapBytes(): Long = 256L * 1024 * 1024
+        override fun currentMemoryBytes(): Long = 0L
+    }
+
+    private fun buildMockSseOkHttp(sseBody: String?, statusCode: Int = 200): OkHttpClient =
+        OkHttpClient.Builder()
+            .addInterceptor { chain ->
+                if (sseBody == null) {
+                    throw java.io.IOException("Gateway unreachable")
+                }
+                Response.Builder()
+                    .request(chain.request())
+                    .protocol(Protocol.HTTP_1_1)
+                    .code(statusCode)
+                    .message(if (statusCode == 200) "OK" else "Service Unavailable")
+                    .body(sseBody.toResponseBody("text/event-stream".toMediaType()))
+                    .build()
+            }
+            .build()
+
+    @Test
+    fun offlineModeStreamsRealMnnOrFallsBackHonestlyToRules() = runTest {
+        val validJson = """
+            {"summary":"老李向张姐对齐采购合同条款。","tags":["商务合同"],"calendarProposal":null,"relations":[{"source":"老李","target":"张姐","relation":"对齐条款","bidirectional":true}]}
+        """.trimIndent()
+        val realEdge = FakeEdgeEngine(
+            isBackendAvailable = true,
+            initialState = EngineState.Ready("qwen2.5-0.5b-instruct-mnn", "MNN-LLM (ARM64)", 400L * 1024 * 1024),
+            emittedJson = validJson,
+        )
+        val router = UnifiedInferenceRouter(realEdge, CloudSseClient(buildMockSseOkHttp(null)), MemoryAnalyzer())
+
+        val events = router.distillMemory(
+            content = "老李和法务张姐对齐合同条款",
+            nowMillis = 1_700_000_000_000L,
+            mode = InferenceMode.OFFLINE_EDGE,
+            serverBaseUrl = "http://127.0.0.1:8787",
+        ).toList()
+
+        assertTrue(realEdge.generateCalled)
+        assertTrue(events.any { it is DistillationEvent.StreamingPreview })
+        val completed = events.filterIsInstance<DistillationEvent.Completed>().single()
+        assertEquals(AnalysisSource.MNN_EDGE, completed.source)
+        assertTrue(completed.telemetryBadge.contains("MNN 0.5B"))
+        assertTrue(completed.telemetryBadge.contains("TTFT 140ms"))
+
+        // When native MNN backend is unavailable, never pretend MNN ran
+        val unavailableEdge = FakeEdgeEngine(
+            isBackendAvailable = false,
+            initialState = EngineState.Unloaded,
+        )
+        val fallbackRouter = UnifiedInferenceRouter(
+            unavailableEdge,
+            CloudSseClient(buildMockSseOkHttp(null)),
+            MemoryAnalyzer(),
+        )
+        val fallbackEvents = fallbackRouter.distillMemory(
+            content = "老李和法务张姐对齐合同条款",
+            nowMillis = 1_700_000_000_000L,
+            mode = InferenceMode.OFFLINE_EDGE,
+            serverBaseUrl = "http://127.0.0.1:8787",
+        ).toList()
+
+        assertFalse(unavailableEdge.generateCalled)
+        val fallbackCompleted = fallbackEvents.filterIsInstance<DistillationEvent.Completed>().single()
+        assertEquals(AnalysisSource.LOCAL_RULE_FALLBACK, fallbackCompleted.source)
+        assertEquals("本地规则兜底", fallbackCompleted.telemetryBadge)
     }
 
     @Test
-    fun emitsCitationsBeforeStreamingOfflineAnswerAndFallsBackWhenCloudUnreachable() = runTest {
-        val seedItem = MemoryItem(
-            id = "seed-1",
-            content = "调试后台账号 test_panel，初始密码 Admin@9527",
-            summary = "调试凭证",
-            tags = listOf("凭证备份"),
-            createdAtMillis = 1000L,
-            analysisStatus = MemoryAnalysisStatus.READY,
-            calendarProposal = null,
-            calendarSaved = false,
-            relations = emptyList(),
+    fun cloudModeStreamsSseAndFallsBackGracefullyOnHttpError() = runTest {
+        val payloadJson = """{"summary":"明日评审补充条款。","tags":["日程跟进"],"calendarProposal":null,"relations":[]}"""
+        val escaped = payloadJson.replace("\"", "\\\"")
+        val sseStream = buildString {
+            append("""data: {"delta":"$escaped","done":false,"model":"gpt-4o-mini","latencyMs":12}""").append("\n\n")
+            append("""data: {"delta":"","done":true,"model":"gpt-4o-mini","latencyMs":48}""").append("\n\n")
+            append("data: [DONE]\n\n")
+        }
+
+        val edge = FakeEdgeEngine(isBackendAvailable = false, initialState = EngineState.Unloaded)
+        val cloudRouter = UnifiedInferenceRouter(edge, CloudSseClient(buildMockSseOkHttp(sseStream)), MemoryAnalyzer())
+
+        val events = cloudRouter.distillMemory(
+            content = "明天评审补充条款",
+            nowMillis = 1_700_000_000_000L,
+            mode = InferenceMode.CLOUD_COLLAB,
+            serverBaseUrl = "http://127.0.0.1:8787",
+        ).toList()
+
+        val completed = events.filterIsInstance<DistillationEvent.Completed>().single()
+        assertEquals(AnalysisSource.CLOUD_SSE, completed.source)
+        assertTrue(completed.telemetryBadge.startsWith("Cloud SSE"))
+
+        // 503 unconfigured gateway should degrade to local rule fallback transparently
+        val unconfiguredRouter = UnifiedInferenceRouter(
+            edge,
+            CloudSseClient(buildMockSseOkHttp("{\"detail\":\"not configured\"}", statusCode = 503)),
+            MemoryAnalyzer(),
         )
-        val store = FakeLocalStore(listOf(seedItem))
-        val engine = FakeEdgeEngine()
-        val repo = MemoryRepository(store, engine, MemoryAnalyzer(engine))
-        val router = UnifiedInferenceRouter(repo, engine, CloudSseClient(OkHttpClient()))
+        val degradedEvents = unconfiguredRouter.distillMemory(
+            content = "明天评审补充条款",
+            nowMillis = 1_700_000_000_000L,
+            mode = InferenceMode.CLOUD_COLLAB,
+            serverBaseUrl = "http://127.0.0.1:8787",
+        ).toList()
 
-        val offlineEvents = router.ask("测试密码是多少？", InferenceMode.OFFLINE_EDGE, "http://127.0.0.1:1").toList()
-        val citations = offlineEvents.filterIsInstance<AskStreamEvent.CitationsReady>().single()
-        val completed = offlineEvents.filterIsInstance<AskStreamEvent.Completed>().single()
-
-        assertEquals("seed-1", citations.citations.first().memory.id)
-        assertTrue(engine.lastPrompt.contains("Admin@9527"))
-        assertEquals("密码是 Admin@9527", completed.fullText)
-
-        // Cloud mode targeting closed local port should degrade gracefully to edge engine
-        val fallbackEvents = router.ask("测试密码是多少？", InferenceMode.CLOUD_COLLAB, "http://127.0.0.1:1").toList()
-        val deltas = fallbackEvents.filterIsInstance<AskStreamEvent.TokenDelta>().joinToString("") { it.delta }
-        assertTrue(deltas.contains("已自动降级为端侧 MNN 离线推理"))
+        val degradedCompleted = degradedEvents.filterIsInstance<DistillationEvent.Completed>().single()
+        assertEquals(AnalysisSource.LOCAL_RULE_FALLBACK, degradedCompleted.source)
+        assertEquals("云端未连接 · 本地规则兜底", degradedCompleted.telemetryBadge)
     }
 }

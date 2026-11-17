@@ -1,5 +1,6 @@
 package io.github.cinpecan.engram.data.seed
 
+import io.github.cinpecan.engram.domain.model.AnalysisSource
 import io.github.cinpecan.engram.domain.model.CalendarProposal
 import io.github.cinpecan.engram.domain.model.MemoryAnalysisStatus
 import io.github.cinpecan.engram.domain.model.MemoryItem
@@ -12,7 +13,7 @@ import java.time.format.DateTimeFormatter
 
 /**
  * Provides a cohesive 3-part narrative showcasing White-Box Memory, 2D Deponder relationships,
- * Human-in-the-loop calendar actions, and cross-memory local RAG retrieval.
+ * and Human-in-the-loop calendar actions.
  */
 object SeedStorylineProvider {
 
@@ -39,6 +40,8 @@ object SeedStorylineProvider {
                 RelationTriple("seed-1_r1", "seed-1", "老李", "柔性屏模组", "报价供样", bidirectional = false),
                 RelationTriple("seed-1_r2", "seed-1", "陈工", "柔性屏模组", "烧屏测试", bidirectional = false),
             ),
+            analysisSource = AnalysisSource.SEED,
+            telemetryBadge = "预置示例",
         )
 
         val day2 = MemoryItem(
@@ -59,6 +62,8 @@ object SeedStorylineProvider {
                 RelationTriple("seed-2_r5", "seed-2", "采购合同", "法务张姐", "卡点审查", bidirectional = false),
                 RelationTriple("seed-2_r6", "seed-2", "法务张姐", "老李", "条款对齐", bidirectional = true),
             ),
+            analysisSource = AnalysisSource.SEED,
+            telemetryBadge = "预置示例",
         )
 
         val day3 = MemoryItem(
@@ -80,6 +85,8 @@ object SeedStorylineProvider {
                 RelationTriple("seed-3_r1", "seed-3", "陈工", "采购合同", "确认签字节点", bidirectional = false),
                 RelationTriple("seed-3_r2", "seed-3", "法务张姐", "陈工", "联合评审", bidirectional = true),
             ),
+            analysisSource = AnalysisSource.SEED,
+            telemetryBadge = "预置示例",
         )
 
         return listOf(day1, day2, day3)

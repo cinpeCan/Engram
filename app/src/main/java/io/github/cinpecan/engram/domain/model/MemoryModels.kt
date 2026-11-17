@@ -37,6 +37,19 @@ enum class MemoryAnalysisStatus {
     READY,
 }
 
+enum class AnalysisSource {
+    MNN_EDGE,
+    CLOUD_SSE,
+    LOCAL_RULE_FALLBACK,
+    SEED,
+}
+
+@Immutable
+data class StreamingPreviewState(
+    val partialText: String,
+    val stageLabel: String,
+)
+
 @Immutable
 data class MemoryItem(
     val id: String,
@@ -48,6 +61,8 @@ data class MemoryItem(
     val calendarProposal: CalendarProposal?,
     val calendarSaved: Boolean,
     val relations: List<RelationTriple>,
+    val analysisSource: AnalysisSource = AnalysisSource.LOCAL_RULE_FALLBACK,
+    val telemetryBadge: String = "",
 )
 
 enum class InferenceMode {

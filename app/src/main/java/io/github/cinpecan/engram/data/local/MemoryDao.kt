@@ -48,7 +48,9 @@ interface MemoryDao {
         SET summary = :summary,
             tags_json = :tagsJson,
             analysis_status = :status,
-            calendar_json = :calendarJson
+            calendar_json = :calendarJson,
+            analysis_source = :analysisSource,
+            telemetry_badge = :telemetryBadge
         WHERE id = :memoryId
         """,
     )
@@ -58,6 +60,8 @@ interface MemoryDao {
         tagsJson: String,
         status: String,
         calendarJson: String?,
+        analysisSource: String,
+        telemetryBadge: String,
     )
 
     @Query("UPDATE memories SET calendar_saved = 1 WHERE id = :memoryId")
@@ -68,21 +72,6 @@ interface MemoryDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertRelations(relations: List<MemoryRelationEntity>)
-
-    @Query("DELETE FROM memories_fts WHERE memory_id = :memoryId")
-    suspend fun deleteFtsForMemory(memoryId: String)
-
-    @Insert
-    suspend fun insertFts(fts: MemoryFtsEntity)
-
-    @Upsert
-    suspend fun upsertEmbedding(embedding: MemoryEmbeddingEntity)
-
-    @Query("SELECT memory_id, bigram_tokens FROM memories_fts WHERE bigram_tokens MATCH :matchExpr")
-    suspend fun queryFtsHits(matchExpr: String): List<FtsHitProjection>
-
-    @Query("SELECT * FROM memory_embeddings")
-    suspend fun getAllEmbeddings(): List<MemoryEmbeddingEntity>
 
     @Query("SELECT COUNT(*) FROM memories")
     suspend fun countMemories(): Int

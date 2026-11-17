@@ -17,11 +17,11 @@ class CloudSseClient(
     private val okHttpClient: OkHttpClient,
     private val json: Json = Json { ignoreUnknownKeys = true },
 ) {
-    fun streamChat(
+    fun streamAnalyze(
         baseUrl: String,
-        requestPayload: ChatStreamRequestDto,
-    ): Flow<ChatStreamChunkDto> = flow {
-        val url = baseUrl.trim().trimEnd('/') + "/api/v1/chat/stream"
+        requestPayload: AnalysisStreamRequestDto,
+    ): Flow<AnalysisStreamChunkDto> = flow {
+        val url = baseUrl.trim().trimEnd('/') + "/api/v1/analyze/stream"
         val body = json.encodeToString(requestPayload)
             .toRequestBody("application/json; charset=utf-8".toMediaType())
 
@@ -36,13 +36,29 @@ class CloudSseClient(
                 error("Cloud gateway HTTP ${response.code}")
             }
             val source = response.body?.source() ?: error("Empty SSE body")
+            var sawDoneChunk = false
+            var sawDoneMarker = false
+
             while (currentCoroutineContext().isActive && !source.exhausted()) {
                 val line = source.readUtf8Line() ?: break
                 if (line.isBlank() || !line.startsWith("data:")) continue
-                val raw = line.removePrefix("data:").trim()
-                if (raw == "[DONE]") break
-                val chunk = json.decodeFromString<ChatStreamChunkDto>(raw)
+                val raw = line.removePrefix("data:").strip()
+                if (raw == "[DONE]") {
+                    sawDoneMarker = true
+                    break
+                }
+                val chunk = json.decodeFromString<AnalysisStreamChunkDto>(raw)
+                if (!chunk.error.isNullOrBlank()) {
+                    error(chunk.error)
+                }
+                if (chunk.done) {
+                    sawDoneChunk = true
+                }
                 emit(chunk)
+            }
+
+            if (!sawDoneChunk && !sawDoneMarker) {
+                error("Incomplete cloud SSE stream")
             }
         }
     }.flowOn(Dispatchers.IO)

@@ -3,8 +3,6 @@ package io.github.cinpecan.engram.domain.analyzer
 import io.github.cinpecan.engram.domain.model.CalendarProposal
 import io.github.cinpecan.engram.domain.model.MemoryAnalysisPayload
 import io.github.cinpecan.engram.domain.model.RelationTriple
-import io.github.cinpecan.engram.edgemnn.EdgeAiEngine
-import io.github.cinpecan.engram.edgemnn.StreamChunk
 import java.time.DayOfWeek
 import java.time.Instant
 import java.time.LocalDate
@@ -15,20 +13,53 @@ import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
 import java.time.temporal.TemporalAdjusters
 import kotlin.math.roundToLong
-import kotlinx.coroutines.flow.last
 import kotlinx.serialization.json.Json
 
 /**
- * Extracts practical, user-facing metadata (clean title/summary, domain tags, calendar proposal,
- * and sanitized 2D triples) using [EdgeAiEngine] with deterministic Chinese/English heuristics.
+ * Pure structured prompt builder, resilient JSON parser, Deponder triple sanitizer,
+ * and deterministic rule fallback for offline memory distillation.
  */
 class MemoryAnalyzer(
-    private val engine: EdgeAiEngine,
     private val json: Json = Json { ignoreUnknownKeys = true },
     private val zoneId: ZoneId = ZoneId.systemDefault(),
 ) {
 
-    suspend fun analyze(
+    fun buildAnalysisPrompt(content: String, nowMillis: Long = System.currentTimeMillis()): String {
+        val nowLocal = LocalDateTime.ofInstant(Instant.ofEpochMilli(nowMillis), zoneId)
+        val formattedNow = nowLocal.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm (EEEE)"))
+        return """
+            你是印迹（Engram）白盒记忆助手。当前本地时间：$formattedNow。
+            请将用户的松散原始记录提炼为凝练完整的摘要（1~2句话，保留关键人物、时间、事项与核心结论，不要写成简短标题，也不要直接暴露明文密码口令；20~100字），并提取场景标签（无合适分类返回 []）、日程提议（若含"1小时后"等相对时间请换算为精确ISO时间）及实体关系三元组，仅输出 JSON_SCHEMA：
+            {"summary":"AI提炼的完整核心摘要","tags":["场景标签"],"calendarProposal":{"title":"日程事项","startTimeIso":"YYYY-MM-DDTHH:MM:SS","durationMinutes":30,"location":null},"relations":[{"source":"","target":"","relation":"","bidirectional":false}]}
+            原文：$content
+        """.trimIndent()
+    }
+
+    fun mergeModelJsonOrNull(
+        rawText: String,
+        rawContent: String,
+        nowMillis: Long = System.currentTimeMillis(),
+    ): MemoryAnalysisPayload? {
+        val parsedFromModel = parseJsonPayload(rawText) ?: return null
+        val heuristic by lazy { fallbackAnalyze(rawContent, nowMillis) }
+        val cleanedRelations = sanitizeRelations(
+            if (parsedFromModel.relations.isNotEmpty()) parsedFromModel.relations else heuristic.relations,
+        )
+        val modelTags = parsedFromModel.tags
+            .map { it.trim().removePrefix("#") }
+            .filter { it.isNotEmpty() }
+            .distinct()
+            .take(3)
+        val resolvedTags = modelTags.ifEmpty { heuristic.tags }
+        return parsedFromModel.copy(
+            summary = parsedFromModel.summary.ifBlank { heuristic.summary }.take(160),
+            tags = resolvedTags,
+            calendarProposal = parsedFromModel.calendarProposal ?: heuristic.calendarProposal,
+            relations = cleanedRelations,
+        )
+    }
+
+    fun fallbackAnalyze(
         content: String,
         nowMillis: Long = System.currentTimeMillis(),
     ): MemoryAnalysisPayload {
@@ -36,35 +67,16 @@ class MemoryAnalyzer(
         if (trimmed.isEmpty()) {
             return MemoryAnalysisPayload(summary = "", tags = emptyList())
         }
-
-        val prompt = buildAnalysisPrompt(trimmed, nowMillis)
-        val rawModelText = runCatching {
-            val terminal = engine.streamGenerate(prompt, maxTokens = 384).last()
-            (terminal as? StreamChunk.Completed)?.fullText.orEmpty()
-        }.getOrDefault("")
-
-        val parsedFromModel = parseJsonPayload(rawModelText)
-        val heuristic = heuristicAnalyze(trimmed, nowMillis)
-
-        return if (parsedFromModel != null) {
-            val cleanedRelations = sanitizeRelations(
-                if (parsedFromModel.relations.isNotEmpty()) parsedFromModel.relations else heuristic.relations,
-            )
-            val modelTags = parsedFromModel.tags
-                .map { it.trim().removePrefix("#") }
-                .filter { it.isNotEmpty() }
-                .distinct()
-                .take(3)
-            val resolvedTags = modelTags.ifEmpty { heuristic.tags }
-            parsedFromModel.copy(
-                summary = parsedFromModel.summary.ifBlank { heuristic.summary }.take(160),
-                tags = resolvedTags,
-                calendarProposal = parsedFromModel.calendarProposal ?: heuristic.calendarProposal,
-                relations = cleanedRelations,
-            )
-        } else {
-            heuristic.copy(relations = sanitizeRelations(heuristic.relations))
-        }
+        val calendar = extractCalendarProposal(trimmed, nowMillis)
+        val summary = buildSummary(trimmed, calendar, nowMillis)
+        val tags = extractTags(trimmed, hasCalendarProposal = calendar != null)
+        val relations = sanitizeRelations(extractRelations(trimmed))
+        return MemoryAnalysisPayload(
+            summary = summary,
+            tags = tags,
+            calendarProposal = calendar,
+            relations = relations,
+        )
     }
 
     internal fun parseJsonPayload(rawText: String): MemoryAnalysisPayload? {
@@ -78,19 +90,6 @@ class MemoryAnalyzer(
         if (start < 0 || end <= start) return null
         val candidate = cleaned.substring(start, end + 1)
         return runCatching { json.decodeFromString<MemoryAnalysisPayload>(candidate) }.getOrNull()
-    }
-
-    internal fun heuristicAnalyze(content: String, nowMillis: Long): MemoryAnalysisPayload {
-        val calendar = extractCalendarProposal(content, nowMillis)
-        val summary = buildSummary(content, calendar, nowMillis)
-        val tags = extractTags(content, hasCalendarProposal = calendar != null)
-        val relations = sanitizeRelations(extractRelations(content))
-        return MemoryAnalysisPayload(
-            summary = summary,
-            tags = tags,
-            calendarProposal = calendar,
-            relations = relations,
-        )
     }
 
     private fun buildSummary(
@@ -406,17 +405,6 @@ class MemoryAnalyzer(
         clause.contains("交接") || clause.contains("测试") -> "交付测试"
         clause.contains("对齐") -> "条款对齐"
         else -> "协同推进"
-    }
-
-    private fun buildAnalysisPrompt(content: String, nowMillis: Long): String {
-        val nowLocal = LocalDateTime.ofInstant(Instant.ofEpochMilli(nowMillis), zoneId)
-        val formattedNow = nowLocal.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm (EEEE)"))
-        return """
-            你是印迹（Engram）白盒记忆助手。当前本地时间：$formattedNow。
-            请将用户的松散原始记录提炼为凝练完整的摘要（1~2句话，保留关键人物、时间、事项与核心结论，不要写成简短标题，也不要直接暴露明文密码口令；20~100字），并提取场景标签（无合适分类返回 []）、日程提议（若含"1小时后"等相对时间请换算为精确ISO时间）及实体关系三元组，仅输出 JSON_SCHEMA：
-            {"summary":"AI提炼的完整核心摘要","tags":["场景标签"],"calendarProposal":{"title":"日程事项","startTimeIso":"YYYY-MM-DDTHH:MM:SS","durationMinutes":30,"location":null},"relations":[{"source":"","target":"","relation":"","bidirectional":false}]}
-            原文：$content
-        """.trimIndent()
     }
 
     private fun containsAny(text: String, keywords: List<String>): Boolean =
