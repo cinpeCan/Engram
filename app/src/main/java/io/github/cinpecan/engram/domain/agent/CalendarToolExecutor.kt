@@ -1,5 +1,6 @@
 package io.github.cinpecan.engram.domain.agent
 
+import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
@@ -11,7 +12,7 @@ import java.time.OffsetDateTime
 import java.time.ZoneId
 
 /**
- * Human-in-the-Loop Calendar Agent tool: only invoked after explicit user tap on confirmation card.
+ * Human-in-the-Loop Calendar Agent tool: only invoked after explicit user tap.
  */
 object CalendarToolExecutor {
 
@@ -31,12 +32,15 @@ object CalendarToolExecutor {
                 putExtra(CalendarContract.Events.EVENT_LOCATION, loc)
             }
             putExtra(CalendarContract.Events.DESCRIPTION, "Created by Engram White-Box Memory Agent")
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
     }
 
     fun launchCalendarInsert(context: Context, proposal: CalendarProposal): Boolean {
-        val intent = buildInsertIntent(proposal)
+        val intent = buildInsertIntent(proposal).apply {
+            if (context !is Activity) {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+        }
         return try {
             context.startActivity(intent)
             true

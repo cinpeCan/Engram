@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -72,7 +73,7 @@ class MemoryAnalyzerTest {
     }
 
     @Test
-    fun extractsCleanTitleAndExactTimeForRelativeDurationNotes() = runTest {
+    fun extractsDistilledSummaryAndExactTimeForRelativeDurationNotes() = runTest {
         val zone = ZoneId.of("Asia/Shanghai")
         val nowMillis = LocalDateTime.of(2026, 11, 17, 17, 30, 0)
             .atZone(zone)
@@ -81,7 +82,9 @@ class MemoryAnalyzerTest {
         val analyzer = MemoryAnalyzer(StubEdgeEngine("{}"), zoneId = zone)
 
         val mealPayload = analyzer.analyze("1小时后吃饭", nowMillis = nowMillis)
-        assertEquals("吃饭", mealPayload.summary)
+        assertTrue(mealPayload.summary.contains("18:30"))
+        assertTrue(mealPayload.summary.contains("吃饭"))
+        assertTrue(mealPayload.summary != "吃饭")
         assertEquals(listOf("饮食", "日程提醒"), mealPayload.tags)
 
         val mealCal = requireNotNull(mealPayload.calendarProposal)
@@ -94,6 +97,14 @@ class MemoryAnalyzerTest {
         assertEquals("拿快递", parcelCal.title)
         assertEquals("2026-11-17T18:00:00", parcelCal.startTimeIso)
         assertEquals(listOf("生活待办", "日程提醒"), parcelPayload.tags)
+
+        val credPayload = analyzer.analyze(
+            "调试后台账号 test_panel，初始密码 Admin@9527，下周交接给研发陈工做烧屏测试。",
+            nowMillis = nowMillis,
+        )
+        assertFalse(credPayload.summary.contains("Admin@9527"))
+        assertFalse(credPayload.summary.contains("test_panel"))
+        assertTrue(credPayload.summary.contains("陈工"))
     }
 
     @Test

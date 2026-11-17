@@ -12,6 +12,7 @@ import java.time.LocalDateTime
 import java.time.LocalTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import java.time.temporal.ChronoUnit
 import java.time.temporal.TemporalAdjusters
 import kotlin.math.roundToLong
 import kotlinx.coroutines.flow.last
@@ -81,7 +82,7 @@ class MemoryAnalyzer(
 
     internal fun heuristicAnalyze(content: String, nowMillis: Long): MemoryAnalysisPayload {
         val calendar = extractCalendarProposal(content, nowMillis)
-        val summary = buildSummary(content, calendar?.title)
+        val summary = buildSummary(content, calendar, nowMillis)
         val tags = extractTags(content, hasCalendarProposal = calendar != null)
         val relations = sanitizeRelations(extractRelations(content))
         return MemoryAnalysisPayload(
@@ -92,18 +93,65 @@ class MemoryAnalyzer(
         )
     }
 
-    private fun buildSummary(content: String, extractedActionTitle: String?): String {
-        val trimmed = content.trim()
-        if (!extractedActionTitle.isNullOrBlank() && extractedActionTitle != trimmed) {
-            return extractedActionTitle
+    private fun buildSummary(
+        content: String,
+        calendar: CalendarProposal?,
+        nowMillis: Long,
+    ): String {
+        if (calendar != null) {
+            val formatted = runCatching {
+                val startDt = LocalDateTime.parse(calendar.startTimeIso)
+                val baseDate = Instant.ofEpochMilli(nowMillis).atZone(zoneId).toLocalDate()
+                val dayDiff = ChronoUnit.DAYS.between(baseDate, startDt.toLocalDate())
+                val dateLabel = when (dayDiff) {
+                    0L -> "今日"
+                    1L -> "明日"
+                    2L -> "后日"
+                    else -> startDt.format(DateTimeFormatter.ofPattern("MM-dd"))
+                }
+                val timePart = startDt.format(DateTimeFormatter.ofPattern("HH:mm"))
+                val locPart = calendar.location?.takeIf { it.isNotBlank() }?.let { "于$it" }.orEmpty()
+                val actionCore = if (calendar.title.length <= 4) "${calendar.title}安排" else calendar.title
+                "$dateLabel $timePart$locPart，$actionCore。".take(100)
+            }.getOrNull()
+            if (!formatted.isNullOrBlank()) {
+                return formatted
+            }
         }
-        val firstClause = trimmed
+
+        val redacted = redactSensitiveDetails(content.trim())
             .replace('\n', ' ')
+            .let { LEADING_TOPIC_PREFIX_REGEX.replace(it, "") }
+            .trim()
+        val clauses = redacted
             .split('。', '！', '？', ';', '；')
-            .firstOrNull { it.isNotBlank() }
-            ?.trim()
-            ?: trimmed
-        return if (firstClause.length > 48) firstClause.take(48) + "…" else firstClause
+            .map { LEADING_TOPIC_PREFIX_REGEX.replace(it.trim(), "").trim('，', ',', ' ') }
+            .filter { it.isNotBlank() }
+
+        if (clauses.isEmpty()) {
+            return if (redacted.length > 96) redacted.take(96) + "…" else redacted
+        }
+
+        val sb = StringBuilder()
+        for (clause in clauses) {
+            val nextLen = if (sb.isEmpty()) clause.length else sb.length + 1 + clause.length
+            if (sb.isNotEmpty() && nextLen > 92) break
+            if (sb.isNotEmpty()) sb.append('；')
+            sb.append(clause)
+            if (sb.length >= 44) break
+        }
+        val joined = sb.toString().trim()
+        return when {
+            joined.length > 96 -> joined.take(96) + "…"
+            joined.endsWith("。") || joined.endsWith("！") || joined.endsWith("？") -> joined
+            else -> "$joined。"
+        }
+    }
+
+    internal fun redactSensitiveDetails(text: String): String {
+        var result = ACCOUNT_SECRET_PAIR_REGEX.replace(text, "已留存相关账号凭证（详见原文）")
+        result = PASSWORD_SECRET_REGEX.replace(result, "已留存相关凭证（详见原文）")
+        return result
     }
 
     private fun extractTags(content: String, hasCalendarProposal: Boolean): List<String> {
@@ -364,9 +412,9 @@ class MemoryAnalyzer(
         val nowLocal = LocalDateTime.ofInstant(Instant.ofEpochMilli(nowMillis), zoneId)
         val formattedNow = nowLocal.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm (EEEE)"))
         return """
-            你是笔记助手。当前本地时间：$formattedNow。
-            请从用户笔记中提炼精炼标题、生活或工作场景标签（无合适分类时返回空数组 []）、日程提醒（若含"1小时后"等相对时间请换算为精确ISO时间）及实体关系三元组，仅输出 JSON_SCHEMA：
-            {"summary":"精炼主题标题(<=20字)","tags":["场景标签"],"calendarProposal":{"title":"事项名","startTimeIso":"YYYY-MM-DDTHH:MM:SS","durationMinutes":30,"location":null},"relations":[{"source":"","target":"","relation":"","bidirectional":false}]}
+            你是印迹（Engram）白盒记忆助手。当前本地时间：$formattedNow。
+            请将用户的松散原始记录提炼为凝练完整的摘要（1~2句话，保留关键人物、时间、事项与核心结论，不要写成简短标题，也不要直接暴露明文密码口令；20~100字），并提取场景标签（无合适分类返回 []）、日程提议（若含"1小时后"等相对时间请换算为精确ISO时间）及实体关系三元组，仅输出 JSON_SCHEMA：
+            {"summary":"AI提炼的完整核心摘要","tags":["场景标签"],"calendarProposal":{"title":"日程事项","startTimeIso":"YYYY-MM-DDTHH:MM:SS","durationMinutes":30,"location":null},"relations":[{"source":"","target":"","relation":"","bidirectional":false}]}
             原文：$content
         """.trimIndent()
     }
@@ -391,6 +439,15 @@ class MemoryAnalyzer(
             """(?:早上|上午|中午|下午|晚上|傍晚)?\s*\d{1,2}\s*(?::|：|点)\s*(?:\d{1,2}|半)?|早上|上午|中午|下午|晚上|傍晚""",
         )
         private val LEADING_MODAL_REGEX = Regex("""^(?:记得|提醒我|别忘了|待会儿?|等会儿?|顺便|准备|去(?=吃饭|拿|取|买|开会|见))""")
+        private val LEADING_TOPIC_PREFIX_REGEX = Regex("""^(?:供应商对接|采购推进卡点复盘|项目同步|会议纪要|备忘|记录一下|随手记)[:：]\s*""")
+        private val ACCOUNT_SECRET_PAIR_REGEX = Regex(
+            """(?:调试后台|测试后台|后台|登录)?账号\s*[:：]?\s*[A-Za-z0-9_.-]{3,}(?:\s*[，,、\s]+\s*(?:初始)?(?:密码|口令|token|key)\s*[:：]?\s*[^\s，。,；;]+)?""",
+            RegexOption.IGNORE_CASE,
+        )
+        private val PASSWORD_SECRET_REGEX = Regex(
+            """(?:初始)?(?:密码|口令|验证码)\s*[:：]?\s*[A-Za-z0-9@#$%^&*_.-]{4,}""",
+            RegexOption.IGNORE_CASE,
+        )
 
         private val ZH_NUMBER_MAP = mapOf(
             "一" to 1, "二" to 2, "两" to 2, "三" to 3, "四" to 4, "五" to 5,

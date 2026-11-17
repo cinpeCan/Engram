@@ -27,7 +27,7 @@ data class GraphNodeUi(
 @Immutable
 data class GraphMemoryOption(
     val id: String,
-    val title: String,
+    val summarySnippet: String,
     val edgeCount: Int,
 )
 
@@ -35,7 +35,6 @@ data class GraphMemoryOption(
 data class GraphUiState(
     val activeMemoryId: String? = null,
     val availableMemories: List<GraphMemoryOption> = emptyList(),
-    val memoryTitle: String = "",
     val memorySummary: String = "",
     val nodes: List<GraphNodeUi> = emptyList(),
     val visibleEdges: List<RelationTriple> = emptyList(),
@@ -80,7 +79,7 @@ class GraphViewModel(
                 val count = MemoryAnalyzer.sanitizeRelations(item.relations).size
                 GraphMemoryOption(
                     id = item.id,
-                    title = item.summary.ifBlank { item.content }.take(14),
+                    summarySnippet = item.summary.ifBlank { item.content }.take(16),
                     edgeCount = count,
                 )
             }
@@ -104,8 +103,7 @@ class GraphViewModel(
         GraphUiState(
             activeMemoryId = targetMemory?.id,
             availableMemories = availableMemories,
-            memoryTitle = targetMemory?.summary?.take(28) ?: "2D 关系脉络",
-            memorySummary = targetMemory?.content.orEmpty(),
+            memorySummary = targetMemory?.summary?.ifBlank { targetMemory.content } ?: "2D 关系脉络",
             nodes = nodes,
             visibleEdges = visibleEdges,
             totalEdgeCount = allSanitizedEdges.size,

@@ -102,6 +102,10 @@ class EngineViewModel(
     }
 
     fun loadModel(model: ModelDescriptorDto) {
+        if (model.role == "embedding") {
+            statusNoticeFlow.value = "句向量模型文件已就绪；当前端侧向量检索由内置轻量特征哈希引擎驱动"
+            return
+        }
         viewModelScope.launch {
             val completed = downloadManager.downloadStates.value[model.id] as? ModelDownloadState.Completed
             val dir = completed?.localDirPath ?: ""

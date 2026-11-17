@@ -62,10 +62,13 @@ class MemoryRepository(
 
         val now = System.currentTimeMillis()
         val id = "mem_${UUID.randomUUID().toString().take(8)}"
+        val initialSummary = content.replace(Regex("\\s+"), " ").let {
+            if (it.length > 64) it.take(64) + "…" else it
+        }
         val initial = MemoryItem(
             id = id,
             content = content,
-            summary = if (content.length > 48) content.take(48) + "…" else content,
+            summary = initialSummary,
             tags = emptyList(),
             createdAtMillis = now,
             analysisStatus = MemoryAnalysisStatus.PENDING,

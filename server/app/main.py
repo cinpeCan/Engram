@@ -217,27 +217,42 @@ async def _stream_upstream_openai(
     url = f"{base_url.rstrip('/')}/chat/completions"
 
     async with httpx.AsyncClient(timeout=60.0) as client:
-        async with client.stream("POST", url, headers=headers, json=payload) as resp:
-            resp.raise_for_status()
-            async for line in resp.aiter_lines():
-                if not line or not line.startswith("data:"):
-                    continue
-                data = line.removeprefix("data:").strip()
-                if data == "[DONE]":
-                    break
-                parsed = json.loads(data)
-                choices = parsed.get("choices") or []
-                if not choices:
-                    continue
-                delta_text = (choices[0].get("delta") or {}).get("content") or ""
-                if delta_text:
-                    chunk = ChatStreamChunk(
-                        delta=delta_text,
-                        done=False,
-                        model=model_name,
-                        latencyMs=int((time.perf_counter() - start_time) * 1000),
-                    )
-                    yield f"data: {chunk.model_dump_json()}\n\n"
+        emitted_any = False
+        try:
+            async with client.stream("POST", url, headers=headers, json=payload) as resp:
+                resp.raise_for_status()
+                async for line in resp.aiter_lines():
+                    if not line or not line.startswith("data:"):
+                        continue
+                    data = line.removeprefix("data:").strip()
+                    if data == "[DONE]":
+                        break
+                    parsed = json.loads(data)
+                    choices = parsed.get("choices") or []
+                    if not choices:
+                        continue
+                    delta_text = (choices[0].get("delta") or {}).get("content") or ""
+                    if delta_text:
+                        emitted_any = True
+                        chunk = ChatStreamChunk(
+                            delta=delta_text,
+                            done=False,
+                            model=model_name,
+                            latencyMs=int((time.perf_counter() - start_time) * 1000),
+                        )
+                        yield f"data: {chunk.model_dump_json()}\n\n"
+        except httpx.HTTPError:
+            if not emitted_any:
+                notice_chunk = ChatStreamChunk(
+                    delta="[上游大模型接口响应异常，已自动切换网关本地归纳]\n\n",
+                    done=False,
+                    model="engram-cloud-fallback",
+                    latencyMs=int((time.perf_counter() - start_time) * 1000),
+                )
+                yield f"data: {notice_chunk.model_dump_json()}\n\n"
+                async for fallback_event in _stream_local_fallback(request):
+                    yield fallback_event
+                return
 
     final_chunk = ChatStreamChunk(
         delta="",

@@ -87,6 +87,11 @@ class ModelDownloadManager(
     fun resolveModelDirectory(modelId: String): File =
         File(File(appContext.filesDir, "models"), modelId)
 
+    fun resolveReadyModelDirPath(modelId: String): String? {
+        val model = _catalog.value.firstOrNull { it.id == modelId } ?: return null
+        return resolveExistingModelDir(model)?.absolutePath
+    }
+
     private fun resolveExistingModelDir(model: ModelDescriptorDto): File? {
         val candidates = listOfNotNull(
             File(File(appContext.filesDir, "models"), model.id),
@@ -110,10 +115,14 @@ class ModelDownloadManager(
                 var lastDigestHex = ""
                 for (fileSpec in model.files) {
                     val finalFile = File(targetDir, fileSpec.name)
-                    if (finalFile.exists() && finalFile.length() == fileSpec.sizeBytes) {
-                        cumulativeDone += fileSpec.sizeBytes
+                    val alreadyComplete = finalFile.exists() && (
+                        (fileSpec.sha256 == UNPINNED_SHA256 && finalFile.length() > 0L) ||
+                            finalFile.length() == fileSpec.sizeBytes
+                        )
+                    if (alreadyComplete) {
+                        cumulativeDone += finalFile.length()
                         _downloadStates.update {
-                            it + (model.id to ModelDownloadState.Downloading(cumulativeDone, totalBytes, fileSpec.name))
+                            it + (model.id to ModelDownloadState.Downloading(cumulativeDone.coerceAtMost(totalBytes), totalBytes, fileSpec.name))
                         }
                         lastDigestHex = computeSha256(finalFile)
                         continue
@@ -265,6 +274,22 @@ class ModelDownloadManager(
                     ModelFileDto("tokenizer.txt", "https://modelscope.cn/models/MNN/Qwen2.5-1.5B-Instruct-MNN/resolve/master/tokenizer.txt", 2_450_000L, UNPINNED_SHA256),
                     ModelFileDto("llm.mnn", "https://modelscope.cn/models/MNN/Qwen2.5-1.5B-Instruct-MNN/resolve/master/llm.mnn", 6_153_028L, UNPINNED_SHA256),
                     ModelFileDto("llm.mnn.weight", "https://modelscope.cn/models/MNN/Qwen2.5-1.5B-Instruct-MNN/resolve/master/llm.mnn.weight", 1_019_000_000L, UNPINNED_SHA256),
+                ),
+            ),
+            ModelDescriptorDto(
+                id = "gte-multilingual-base-mnn",
+                name = "GTE Multilingual Base (MNN Embedding)",
+                role = "embedding",
+                quantization = "INT8",
+                sizeBytes = 167_772_160L,
+                minRamMb = 1024,
+                downloadUrl = "https://huggingface.co/taobao-mnn/gte_sentence-embedding_multilingual-base-MNN/resolve/main/model.mnn.weight",
+                mirrorUrl = "https://modelscope.cn/models/MNN/gte_sentence-embedding_multilingual-base-MNN/resolve/master/model.mnn.weight",
+                sha256 = UNPINNED_SHA256,
+                description = "中英双语本地句向量模型，支撑本地混合 RAG 语义召回。",
+                files = listOf(
+                    ModelFileDto("model.mnn", "https://modelscope.cn/models/MNN/gte_sentence-embedding_multilingual-base-MNN/resolve/master/model.mnn", 1_772_160L, UNPINNED_SHA256),
+                    ModelFileDto("model.mnn.weight", "https://modelscope.cn/models/MNN/gte_sentence-embedding_multilingual-base-MNN/resolve/master/model.mnn.weight", 166_000_000L, UNPINNED_SHA256),
                 ),
             ),
         )

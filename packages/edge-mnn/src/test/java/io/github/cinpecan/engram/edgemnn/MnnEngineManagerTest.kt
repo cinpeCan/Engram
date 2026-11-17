@@ -23,10 +23,12 @@ class MnnEngineManagerTest {
         val activeConcurrency = AtomicInteger(0)
         val maxObservedConcurrency = AtomicInteger(0)
         var simulatedHeapBytes: Long = 512L * 1024 * 1024
+        val createdModelDirs = mutableListOf<String>()
 
         override fun hasRealMnnBackend(): Boolean = false
 
         override fun createSession(modelDirPath: String): Long {
+            createdModelDirs.add(modelDirPath)
             simulatedHeapBytes = 768L * 1024 * 1024
             return nextHandle.getAndIncrement()
         }
@@ -146,5 +148,29 @@ class MnnEngineManagerTest {
         manager.onTrimMemory(MnnEngineManager.TRIM_MEMORY_RUNNING_CRITICAL)
         advanceUntilIdle()
         assertEquals(EngineState.Unloaded, manager.state.value)
+    }
+
+    @Test
+    fun lazyReloadAfterTrimMemoryRetainsConfiguredModelDir() = runTest {
+        val bridge = FakeNativeBridge()
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val manager = MnnEngineManager(
+            nativeBridge = bridge,
+            memoryProvider = { bridge.simulatedHeapBytes },
+            serialDispatcher = dispatcher,
+            lifecycleScope = this,
+            coalescer = TokenStreamCoalescer(windowMs = 10L),
+        )
+
+        manager.loadModel("qwen-0.5b", "/tmp/models/qwen")
+        manager.onTrimMemory(MnnEngineManager.TRIM_MEMORY_RUNNING_CRITICAL)
+        advanceUntilIdle()
+        assertEquals(EngineState.Unloaded, manager.state.value)
+
+        val chunks = manager.streamGenerate("hi").toList()
+        val completed = chunks.filterIsInstance<StreamChunk.Completed>().single()
+        assertEquals("测试输出", completed.fullText)
+        assertEquals(listOf("/tmp/models/qwen", "/tmp/models/qwen"), bridge.createdModelDirs)
+        assertEquals("qwen-0.5b", completed.telemetry.modelId)
     }
 }

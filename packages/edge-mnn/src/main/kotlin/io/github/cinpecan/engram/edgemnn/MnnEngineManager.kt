@@ -44,9 +44,20 @@ class MnnEngineManager(
     @Volatile
     private var sessionHandle: Long = 0L
 
+    @Volatile
+    private var configuredModelId: String = DEFAULT_SESSION_ID
+
+    @Volatile
+    private var configuredModelDir: String = ""
+
     private var loadedModelId: String? = null
     private var loadedModelDir: String = ""
     private var uiHiddenUnloadJob: Job? = null
+
+    override fun configureDefaultModel(modelId: String, modelDirPath: String) {
+        configuredModelId = modelId.ifBlank { DEFAULT_SESSION_ID }
+        configuredModelDir = modelDirPath
+    }
 
     override suspend fun loadModel(modelId: String, modelDirPath: String): Result<Unit> =
         withContext(serialDispatcher) {
@@ -55,6 +66,8 @@ class MnnEngineManager(
             jniMutex.withLock {
                 runCatching {
                     if (sessionHandle != 0L && loadedModelId == modelId && loadedModelDir == modelDirPath) {
+                        configuredModelId = modelId
+                        configuredModelDir = modelDirPath
                         return@runCatching
                     }
                     if (sessionHandle != 0L) {
@@ -69,6 +82,8 @@ class MnnEngineManager(
                     sessionHandle = handle
                     loadedModelId = modelId
                     loadedModelDir = modelDirPath
+                    configuredModelId = modelId
+                    configuredModelDir = modelDirPath
                     _state.value = EngineState.Ready(
                         modelId = modelId,
                         backendName = resolveBackendName(modelDirPath),
@@ -231,15 +246,17 @@ class MnnEngineManager(
 
     private fun ensureDefaultSessionLocked() {
         if (sessionHandle != 0L) return
-        val id = loadedModelId ?: DEFAULT_SESSION_ID
+        val id = loadedModelId ?: configuredModelId
+        val dir = loadedModelDir.ifBlank { configuredModelDir }
         _state.value = EngineState.Loading(id)
-        val handle = nativeBridge.createSession(loadedModelDir)
+        val handle = nativeBridge.createSession(dir)
         check(handle != 0L) { "Native createSession failed during lazy initialization" }
         sessionHandle = handle
         loadedModelId = id
+        loadedModelDir = dir
         _state.value = EngineState.Ready(
             modelId = id,
-            backendName = resolveBackendName(loadedModelDir),
+            backendName = resolveBackendName(dir),
             nativeHeapBytes = memoryProvider.nativeHeapAllocatedBytes(),
         )
     }

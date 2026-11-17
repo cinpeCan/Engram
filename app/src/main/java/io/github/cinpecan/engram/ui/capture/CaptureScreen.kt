@@ -1,6 +1,10 @@
 package io.github.cinpecan.engram.ui.capture
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -10,6 +14,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -19,19 +24,20 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Send
+import androidx.compose.material.icons.automirrored.rounded.Subject
+import androidx.compose.material.icons.outlined.CalendarMonth
+import androidx.compose.material.icons.outlined.Hub
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.CalendarMonth
-import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Hub
+import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material3.AssistChip
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -40,13 +46,14 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -65,6 +72,7 @@ import java.util.Locale
 fun CaptureScreen(
     viewModel: CaptureViewModel,
     onOpenGraph: (String) -> Unit,
+    onOpenRawMemory: (String) -> Unit,
     onShowMessage: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -93,20 +101,19 @@ fun CaptureScreen(
                     end = 16.dp,
                     bottom = bottomContentPadding,
                 ),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 items(state.memories, key = { it.id }) { memory ->
                     MemoryTimelineCard(
                         memory = memory,
                         onOpenGraph = { onOpenGraph(memory.id) },
-                        onConfirmCalendar = { proposal ->
+                        onOpenRawMemory = { onOpenRawMemory(memory.id) },
+                        onAddCalendar = { proposal ->
                             val launched = CalendarToolExecutor.launchCalendarInsert(context, proposal)
                             if (launched) {
-                                viewModel.markCalendarSaved(memory.id)
-                                onShowMessage("已拉起系统日历确认日程：${proposal.title}")
+                                onShowMessage("已拉起系统日历草稿：${proposal.title}")
                             } else {
-                                viewModel.markCalendarSaved(memory.id)
-                                onShowMessage("未检测到系统日历应用，已标记该日程提议")
+                                onShowMessage("未检测到可用的系统日历应用")
                             }
                         },
                     )
@@ -214,210 +221,268 @@ fun CaptureScreen(
 private fun MemoryTimelineCard(
     memory: MemoryItem,
     onOpenGraph: () -> Unit,
-    onConfirmCalendar: (CalendarProposal) -> Unit,
+    onOpenRawMemory: () -> Unit,
+    onAddCalendar: (CalendarProposal) -> Unit,
 ) {
-    ElevatedCardContent(
-        memory = memory,
-        onOpenGraph = onOpenGraph,
-        onConfirmCalendar = onConfirmCalendar,
-    )
-}
+    var expanded by rememberSaveable(memory.id) { mutableStateOf(false) }
 
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun ElevatedCardContent(
-    memory: MemoryItem,
-    onOpenGraph: () -> Unit,
-    onConfirmCalendar: (CalendarProposal) -> Unit,
-) {
     Card(
+        onClick = { expanded = !expanded },
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surface,
         ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.5.dp),
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+                .animateContentSize(
+                    animationSpec = spring(
+                        dampingRatio = Spring.DampingRatioNoBouncy,
+                        stiffness = Spring.StiffnessMediumLow,
+                    ),
+                )
+                .padding(horizontal = 15.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            // Compact metadata header
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
-                    text = formatTimestamp(memory.createdAtMillis),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                if (memory.analysisStatus == MemoryAnalysisStatus.PENDING) {
-                    Surface(
-                        shape = RoundedCornerShape(50),
-                        color = MaterialTheme.colorScheme.tertiaryContainer,
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        text = formatTimestamp(memory.createdAtMillis),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                    )
+                    if (!expanded && memory.tags.isNotEmpty()) {
+                        Text(
+                            text = memory.tags.take(2).joinToString("  ") { "#$it" },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.secondary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    if (memory.analysisStatus == MemoryAnalysisStatus.PENDING) {
+                        Surface(
+                            shape = RoundedCornerShape(50),
+                            color = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.7f),
                         ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(3.dp),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.AutoAwesome,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(11.dp),
+                                )
+                                Text(
+                                    text = "提炼中…",
+                                    style = MaterialTheme.typography.labelSmall,
+                                )
+                            }
+                        }
+                    } else if (!expanded) {
+                        if (memory.calendarProposal != null) {
                             Icon(
-                                imageVector = Icons.Rounded.AutoAwesome,
-                                contentDescription = null,
-                                modifier = Modifier.size(12.dp),
+                                imageVector = Icons.Outlined.CalendarMonth,
+                                contentDescription = "包含日程",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f),
+                                modifier = Modifier.size(13.dp),
                             )
-                            Text(
-                                text = "解析中…",
-                                style = MaterialTheme.typography.labelSmall,
+                        }
+                        if (memory.relations.isNotEmpty()) {
+                            Icon(
+                                imageVector = Icons.Outlined.Hub,
+                                contentDescription = "包含脉络",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f),
+                                modifier = Modifier.size(13.dp),
                             )
                         }
                     }
+
+                    Icon(
+                        imageVector = if (expanded) Icons.Rounded.KeyboardArrowUp else Icons.Rounded.KeyboardArrowDown,
+                        contentDescription = if (expanded) "收起" else "展开",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                        modifier = Modifier.size(16.dp),
+                    )
                 }
             }
 
-            if (memory.summary.isNotBlank() && memory.summary != memory.content) {
-                Text(
-                    text = memory.summary,
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-
+            // Primary AI-distilled summary (no separate title; raw content lives in sheet)
             Text(
-                text = memory.content,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                text = memory.summary.ifBlank { memory.content },
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = if (expanded) Int.MAX_VALUE else 2,
+                overflow = TextOverflow.Ellipsis,
             )
 
-            if (memory.tags.isNotEmpty() || memory.relations.isNotEmpty()) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
+            if (expanded) {
+                if (memory.tags.isNotEmpty()) {
                     FlowRow(
-                        modifier = Modifier.weight(1f),
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
                         memory.tags.forEach { tag ->
                             Surface(
-                                shape = RoundedCornerShape(8.dp),
-                                color = MaterialTheme.colorScheme.surfaceVariant,
+                                shape = RoundedCornerShape(6.dp),
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
                             ) {
                                 Text(
                                     text = "#$tag",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
                                 )
                             }
                         }
                     }
+                }
 
+                memory.calendarProposal?.let { proposal ->
+                    ScheduleInlineStrip(
+                        proposal = proposal,
+                        onAddCalendar = { onAddCalendar(proposal) },
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
                     if (memory.relations.isNotEmpty()) {
-                        TextButton(onClick = onOpenGraph) {
+                        Row(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable(onClick = onOpenGraph)
+                                .padding(horizontal = 6.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
                             Icon(
-                                imageVector = Icons.Rounded.Hub,
+                                imageVector = Icons.Outlined.Hub,
                                 contentDescription = null,
-                                modifier = Modifier.size(16.dp),
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(14.dp),
                             )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("2D 脉络 (${memory.relations.size})")
+                            Text(
+                                text = "脉络 (${memory.relations.size})",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
                         }
+                    } else {
+                        Spacer(modifier = Modifier.width(1.dp))
+                    }
+
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable(onClick = onOpenRawMemory)
+                            .padding(horizontal = 6.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(3.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Rounded.Subject,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
+                            modifier = Modifier.size(14.dp),
+                        )
+                        Text(
+                            text = "原文",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
+                        )
                     }
                 }
-            }
-
-            memory.calendarProposal?.let { proposal ->
-                CalendarProposalCard(
-                    proposal = proposal,
-                    alreadySaved = memory.calendarSaved,
-                    onConfirm = { onConfirmCalendar(proposal) },
-                )
             }
         }
     }
 }
 
 @Composable
-private fun CalendarProposalCard(
+private fun ScheduleInlineStrip(
     proposal: CalendarProposal,
-    alreadySaved: Boolean,
-    onConfirm: () -> Unit,
+    onAddCalendar: () -> Unit,
 ) {
-    OutlinedCard(
+    val scheduleSubtitle = buildString {
+        append(proposal.startTimeIso.replace('T', ' ').take(16).let {
+            if (it.length > 5) it.drop(5) else it
+        })
+        append(" · ${proposal.durationMinutes}分钟")
+        proposal.location?.takeIf { it.isNotBlank() }?.let { loc ->
+            append(" · $loc")
+        }
+    }
+
+    Surface(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(14.dp),
-        colors = CardDefaults.outlinedCardColors(
-            containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.28f),
-        ),
+        shape = RoundedCornerShape(10.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.42f),
     ) {
-        Column(
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+                .padding(start = 10.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            Icon(
+                imageVector = Icons.Outlined.CalendarMonth,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(15.dp),
+            )
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(1.dp),
             ) {
-                Icon(
-                    imageVector = if (alreadySaved) Icons.Rounded.CheckCircle else Icons.Rounded.CalendarMonth,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(18.dp),
+                Text(
+                    text = proposal.title,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    text = if (alreadySaved) "已确认写入系统日历" else "端侧 Agent 建议日程（需人工确认）",
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.primary,
+                    text = scheduleSubtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
-
-            Text(
-                text = proposal.title,
-                style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-
-            val subtitle = buildString {
-                append(proposal.startTimeIso.replace('T', ' ').take(16))
-                append(" · ${proposal.durationMinutes} 分钟")
-                if (!proposal.location.isNullOrBlank()) {
-                    append(" · ${proposal.location}")
-                }
-            }
-            Text(
-                text = subtitle,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-
-            if (!alreadySaved) {
-                Button(
-                    onClick = onConfirm,
-                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
-                    shape = RoundedCornerShape(10.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.primary,
-                    ),
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.CalendarMonth,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp),
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("确认加入系统日历", style = MaterialTheme.typography.labelLarge)
-                }
+            TextButton(
+                onClick = onAddCalendar,
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                modifier = Modifier.height(30.dp),
+            ) {
+                Text(
+                    text = "添至日历",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.secondary,
+                )
             }
         }
     }

@@ -20,6 +20,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.Subject
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
@@ -70,6 +71,7 @@ import kotlin.math.sin
 fun GraphScreen(
     memoryId: String?,
     viewModel: GraphViewModel,
+    onOpenRawMemory: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     LaunchedEffect(memoryId) {
@@ -107,13 +109,26 @@ fun GraphScreen(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        text = state.memoryTitle,
-                        style = MaterialTheme.typography.titleMedium,
-                        maxLines = 1,
+                        text = state.memorySummary,
+                        style = MaterialTheme.typography.titleSmall,
+                        maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f),
                     )
                     Spacer(modifier = Modifier.width(8.dp))
+                    state.activeMemoryId?.let { activeId ->
+                        IconButton(
+                            onClick = { onOpenRawMemory(activeId) },
+                            modifier = Modifier.size(32.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Rounded.Subject,
+                                contentDescription = "查看原文",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(17.dp),
+                            )
+                        }
+                    }
                     FilledTonalButton(
                         onClick = viewModel::replayStreamingGrowth,
                         enabled = state.totalEdgeCount > 1 && !state.isReplaying,
@@ -152,7 +167,7 @@ fun GraphScreen(
                                 onClick = { viewModel.bindMemory(option.id) },
                                 label = {
                                     Text(
-                                        text = "${option.title} (${option.edgeCount})",
+                                        text = "${option.summarySnippet} (${option.edgeCount})",
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
                                     )
@@ -320,12 +335,27 @@ fun GraphScreen(
                         }
                     }
                     state.relatedMemories.take(2).forEach { item ->
-                        Text(
-                            text = "• ${item.content}",
-                            style = MaterialTheme.typography.bodySmall,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                        )
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onOpenRawMemory(item.id) }
+                                .padding(vertical = 2.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = "• ${item.summary.ifBlank { item.content }}",
+                                style = MaterialTheme.typography.bodySmall,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f),
+                            )
+                            Text(
+                                text = "原文",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
+                            )
+                        }
                     }
                 }
             }

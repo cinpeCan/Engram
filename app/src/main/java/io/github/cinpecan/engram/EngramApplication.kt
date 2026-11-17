@@ -5,6 +5,7 @@ import io.github.cinpecan.engram.di.EngramContainer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 class EngramApplication : Application() {
@@ -18,6 +19,10 @@ class EngramApplication : Application() {
         super.onCreate()
         container = EngramContainer(this)
         appScope.launch {
+            val prefs = container.preferencesRepository.preferencesFlow.first()
+            container.modelDownloadManager.resolveReadyModelDirPath(prefs.selectedModelId)?.let { dirPath ->
+                container.edgeEngine.configureDefaultModel(prefs.selectedModelId, dirPath)
+            }
             container.memoryRepository.initializeAndSeedIfNeeded()
         }
     }

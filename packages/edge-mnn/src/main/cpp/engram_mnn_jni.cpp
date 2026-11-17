@@ -175,6 +175,32 @@ public:
     int64_t ttft_ms() const { return ttft_ms_ >= 0 ? ttft_ms_ : 0; }
     int generated_tokens() const { return token_count_; }
 
+    void FlushValidUtf8Prefix(bool flush_all) {
+        if (pending_utf8_.empty()) return;
+        size_t emit_len = pending_utf8_.size();
+        if (!flush_all) {
+            emit_len = FindCompleteUtf8Boundary(pending_utf8_);
+        }
+        if (emit_len == 0) return;
+
+        if (ttft_ms_ < 0) {
+            auto now = std::chrono::steady_clock::now();
+            ttft_ms_ = std::chrono::duration_cast<std::chrono::milliseconds>(now - start_time_).count();
+        }
+        ++token_count_;
+        std::string chunk = pending_utf8_.substr(0, emit_len);
+        pending_utf8_.erase(0, emit_len);
+        jstring jdelta = Utf8ToJString(env_, chunk);
+        if (jdelta != nullptr) {
+            env_->CallVoidMethod(callback_, on_token_method_, jdelta);
+            env_->DeleteLocalRef(jdelta);
+        }
+        if (env_->ExceptionCheck()) {
+            env_->ExceptionClear();
+            session_->cancel_requested.store(true);
+        }
+    }
+
 protected:
     std::streamsize xsputn(const char* s, std::streamsize n) override {
         if (n <= 0 || session_->cancel_requested.load()) {
@@ -184,17 +210,8 @@ protected:
             session_->cancel_requested.store(true);
             return n;
         }
-        if (ttft_ms_ < 0) {
-            auto now = std::chrono::steady_clock::now();
-            ttft_ms_ = std::chrono::duration_cast<std::chrono::milliseconds>(now - start_time_).count();
-        }
-        ++token_count_;
-        std::string chunk(s, static_cast<size_t>(n));
-        jstring jdelta = Utf8ToJString(env_, chunk);
-        if (jdelta != nullptr) {
-            env_->CallVoidMethod(callback_, on_token_method_, jdelta);
-            env_->DeleteLocalRef(jdelta);
-        }
+        pending_utf8_.append(s, static_cast<size_t>(n));
+        FlushValidUtf8Prefix(false);
         return n;
     }
 
@@ -207,6 +224,37 @@ protected:
     }
 
 private:
+    static size_t FindCompleteUtf8Boundary(const std::string& bytes) {
+        const size_t size = bytes.size();
+        if (size == 0) return 0;
+        // Walk backwards at most 3 bytes to check if a multi-byte sequence is incomplete at the tail
+        size_t tail_cont = 0;
+        while (tail_cont < 3 && tail_cont < size &&
+               (static_cast<uint8_t>(bytes[size - 1 - tail_cont]) & 0xC0) == 0x80) {
+            ++tail_cont;
+        }
+        if (tail_cont == size) {
+            // Only continuation bytes without lead byte; emit as-is
+            return size;
+        }
+        const size_t lead_idx = size - 1 - tail_cont;
+        const uint8_t lead = static_cast<uint8_t>(bytes[lead_idx]);
+        size_t expected_len = 1;
+        if ((lead & 0x80) == 0) {
+            expected_len = 1;
+        } else if ((lead & 0xE0) == 0xC0) {
+            expected_len = 2;
+        } else if ((lead & 0xF0) == 0xE0) {
+            expected_len = 3;
+        } else if ((lead & 0xF8) == 0xF0) {
+            expected_len = 4;
+        } else {
+            return size;
+        }
+        const size_t available = size - lead_idx;
+        return (available < expected_len) ? lead_idx : size;
+    }
+
     JNIEnv* env_;
     jobject callback_;
     jmethodID on_token_method_;
@@ -215,6 +263,7 @@ private:
     int max_tokens_;
     int64_t ttft_ms_{-1};
     int token_count_{0};
+    std::string pending_utf8_;
 };
 
 } // namespace
@@ -335,9 +384,11 @@ Java_io_github_cinpecan_engram_edgemnn_JniNativeBridge_nativeGenerateStream(
 
 #if ENGRAM_HAS_MNN_LIB
     if (session->llm != nullptr) {
+        session->llm->reset();
         CallbackStreamBuf stream_buf(env, callback, on_token_id, session, start_time, max_tokens);
         std::ostream os(&stream_buf);
         session->llm->response(prompt_str, &os, nullptr, 0);
+        stream_buf.FlushValidUtf8Prefix(true);
         ttft_ms = stream_buf.ttft_ms();
         generated_tokens = stream_buf.generated_tokens();
     } else

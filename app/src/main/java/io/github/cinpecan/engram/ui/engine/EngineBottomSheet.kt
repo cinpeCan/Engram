@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -53,17 +54,27 @@ fun EngineBottomSheet(
     viewModel: EngineViewModel,
     onDismiss: () -> Unit,
 ) {
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        EngineBottomSheetContent(viewModel = viewModel)
+    }
+}
+
+@Composable
+fun EngineBottomSheetContent(
+    viewModel: EngineViewModel,
+    modifier: Modifier = Modifier,
+) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     var urlDraft by remember(state.serverBaseUrl) { mutableStateOf(state.serverBaseUrl) }
 
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 18.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
+            .navigationBarsPadding()
+            .padding(horizontal = 18.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -169,7 +180,6 @@ fun EngineBottomSheet(
             }
 
             Spacer(modifier = Modifier.size(18.dp))
-        }
     }
 }
 
@@ -261,11 +271,20 @@ private fun ModelCatalogRow(
                     Text(label)
                 }
 
-                Button(
-                    onClick = onLoad,
-                    modifier = Modifier.weight(1f),
-                ) {
-                    Text(if (isSelected) "激活 / 重载" else "加载模型")
+                if (model.role == "embedding") {
+                    OutlinedButton(
+                        onClick = onLoad,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text("向量组件")
+                    }
+                } else {
+                    Button(
+                        onClick = onLoad,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text(if (isSelected) "激活 / 重载" else "加载模型")
+                    }
                 }
             }
         }

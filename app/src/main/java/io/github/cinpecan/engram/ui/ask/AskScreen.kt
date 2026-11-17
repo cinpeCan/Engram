@@ -1,5 +1,6 @@
 package io.github.cinpecan.engram.ui.ask
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -52,6 +53,7 @@ import io.github.cinpecan.engram.ui.viewmodel.AskViewModel
 @Composable
 fun AskScreen(
     viewModel: AskViewModel,
+    onOpenRawMemory: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -163,7 +165,10 @@ fun AskScreen(
                     }
 
                     items(state.turns, key = { it.id }) { turn ->
-                        AskTurnView(turn = turn)
+                        AskTurnView(
+                            turn = turn,
+                            onOpenRawMemory = onOpenRawMemory,
+                        )
                     }
                 }
             },
@@ -212,7 +217,10 @@ fun AskScreen(
 }
 
 @Composable
-private fun AskTurnView(turn: AskConversationTurn) {
+private fun AskTurnView(
+    turn: AskConversationTurn,
+    onOpenRawMemory: (String) -> Unit,
+) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         // User Query Bubble
         Row(
@@ -257,14 +265,31 @@ private fun AskTurnView(turn: AskConversationTurn) {
                                 append(" · Vec #$it (${String.format("%.2f", hit.vectorScore)})")
                             }
                         }
-                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onOpenRawMemory(hit.memory.id) }
+                                .padding(vertical = 2.dp),
+                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    text = "[${idx + 1}] $rankBadge",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.secondary,
+                                )
+                                Text(
+                                    text = "原文",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
+                                )
+                            }
                             Text(
-                                text = "[${idx + 1}] $rankBadge",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.secondary,
-                            )
-                            Text(
-                                text = hit.memory.content,
+                                text = hit.memory.summary.ifBlank { hit.memory.content },
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 2,
