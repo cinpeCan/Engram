@@ -8,14 +8,14 @@
 ## Core Architecture Highlights
 
 - **Monorepo & Contract-First (`contracts/`)**: Shared JSON Schemas (`model-manifest`, `memory-analysis`, `analysis-sse`) align the Kotlin Android client, `:packages:edge-mnn` C++/JNI runtime, and Python `FastAPI` gateway from a single source of truth, reinforced by root `AGENTS.md` and `.cursor/rules/*.mdc`.
-- **Single-Screen Material 3 Workspace & In-Place Streaming Distillation**:
-  - Focused `CaptureScreen` timeline with scroll-collapsing capsule input console (`CollapsibleBottomConsoleLayout`), optical nested corner radii, and Material 3 Expressive springs.
-  - Newly captured memories stream real coalesced deltas in-place during `PENDING` state, then converge via `AnimatedContent` (with subtle haptic feedback) to distilled summaries, tags, `CalendarContract` confirmation strips, expandable raw text with copy action, and honest `AnalysisSource` telemetry badges (`MNN 0.5B`, `Cloud SSE`, or `本地规则兜底`).
-- **Two-Stage Expandable 2D Graph Sheet (`Deponder 0.5.0`)**:
-  - `BottomSheetSceneStrategy(expandable = true)` renders `GraphScreen` as a half-height (`50%`) to full-height (`92%`) stretchable Material 3 `ModalBottomSheet` with a `48dp` accessible drag/tap handle, predictive back support, and sibling canvas gesture isolation so `deponderDrag()` never triggers sheet dismissal.
-  - Anchor-driven physics & scale updates prevent per-frame drag jank and support **Streaming Growth Replay** plus node-tap entity memory citations from Room (`memories` + `memory_relations`).
+- **Single-Screen Material 3 Expressive Workspace & De-emphasized Raw Storage**:
+  - Focused titleless `CaptureScreen` timeline with scroll-collapsing symmetrical input bar enclosing an optically centered `ArrowUpward` action, M3 Expressive spring shape-morphing surfaces & low-glare ripples, tap/scroll IME dismissal, and zero double window insets.
+  - Newly captured memories stream real coalesced deltas in-place during `PENDING` state, then converge via `AnimatedContent` (with subtle haptic feedback) to scannable bulleted summaries, tags, `CalendarContract` confirmation strips, honest model-driven telemetry badges (`MNN 0.5B` / `Cloud SSE`), and a subtle expanded-card `原文` entry opening `RawMemoryBottomSheet`.
+- **Single-Memory Frameless 2D Graph Sheet (`Deponder 0.5.0`)**:
+  - `BottomSheetSceneStrategy(expandable = true)` renders `GraphSheet(memoryId)` as a clean frameless half-height (`50%`) to full-height (`92%`) stretchable Material 3 `ModalBottomSheet` with a top handle/close bar, sibling canvas gesture isolation so `deponderDrag()` never triggers sheet dismissal, and automatic `Δheight / 2` vertical recentering across sheet transitions.
+  - Supports **Streaming Growth Replay** and node-tap entity memory citations from Room (`memories` + `memory_relations`).
 - **Koin 4.2 + Navigation 3 + Fine-Grained Stream MVI**:
-  - Uses official Koin-Nav3 integration (`koin-compose-navigation3` `navigation<T>` + `koinEntryProvider()`), per-entry `ViewModelStore` scoping (`rememberViewModelStoreNavEntryDecorator()`), and `BottomSheetSceneStrategy` overlays (`GraphSheet` & `EngineSheet`).
+  - Uses official Koin-Nav3 integration (`koin-compose-navigation3` `navigation<T>` + `koinEntryProvider()`), per-entry `ViewModelStore` scoping (`rememberViewModelStoreNavEntryDecorator()`), and `BottomSheetSceneStrategy` overlays (`GraphSheet`, `RawMemorySheet`, & `EngineSheet`).
   - Decouples high-frequency text inputs and streaming previews from low-frequency controls into specific `StateFlow` streams, driven by sealed `Intent`s and `Channel`-backed one-shot `Effect`s.
 - **Zero-Stub Native Lifecycle & Memory Safety (`:packages:edge-mnn`)**:
   - Confines every JNI session call onto a single dedicated `mnn-jni-serial` coroutine dispatcher guarded by `Mutex`.

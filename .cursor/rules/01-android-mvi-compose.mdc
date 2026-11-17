@@ -15,14 +15,19 @@ alwaysApply: false
 2. **Koin DI & Navigation 3 (`androidx.navigation3`)**:
    - Maintain a persistent `rememberNavBackStack(EngramNavKey.Capture)` back stack wrapped by an Activity-scoped `EngramNavigator` (`LocalEngramNavigator`).
    - Declare route-to-screen bindings via Koin's official `navigation<T>(metadata = ...)` DSL in `EngramModules.kt` and supply `koinEntryProvider()` to `NavDisplay`.
-   - Always install `rememberSaveableStateHolderNavEntryDecorator()` and `rememberViewModelStoreNavEntryDecorator()` on `NavDisplay` so every `NavEntry` owns an isolated `ViewModelStore` that clears automatically on pop.
-   - Use `BottomSheetSceneStrategy.bottomSheet(expandable = true/false)` for modal overlays (`GraphSheet` two-stage 50%/92% sheet and `EngineSheet`), keeping `Capture` as the single-screen root workspace.
-3. **Deponder 0.5.0 Integration (`com.cinpe.deponder.*`)**:
-   - Wrap each `DeponderDefaultRubber` in `key(edgeKey)` and each node in `key(node.id)` inside `Box(Modifier.deponderRoot(state))`.
+   - Always install `rememberSaveableStateHolderNavEntryDecorator()` and `rememberViewModelStoreNavEntryDecorator()` on `NavDisplay`, and pair `Modifier.padding(innerPadding)` with `.consumeWindowInsets(innerPadding)` so `imePadding()` never double-counts navigation bar insets.
+   - Use `BottomSheetSceneStrategy.bottomSheet(expandable = true/false)` for modal overlays (`GraphSheet(memoryId)` two-stage expandable sheet, `RawMemorySheet(memoryId)`, and `EngineSheet`), keeping `Capture` as the single-screen root workspace with zero unbound top-bar graph entry.
+3. **Summary-First Cards, Symmetrical Composer & M3 Expressive UI**:
+   - Timeline cards remain titleless and summary-first: multi-point AI summaries MUST use concise `\n`-separated `• ` bullets (avoid long multi-clause sentences), omit `"预置示例"` / fallback noise badges, and NEVER inline raw text (`原文`). Expose `原文` solely as a low-emphasis footer link to `RawMemorySheet`.
+   - Render the bottom capture bar as a single full-width symmetrical container enclosing an optically centered `ArrowUpward` action at `Alignment.BottomEnd` with internal bottom padding when multiline (`rememberTextMeasurer()`). Dismiss focus/IME on blank-area tap, card tap while keyboard is active, or user scroll.
+   - Use M3 Expressive spring shape-morphing `ExpressiveCardSurface` / `ExpressivePillSurface` (`indication = null`) and low-glare `LocalRippleConfiguration` over legacy heavy radial ink ripples.
+4. **GraphSheet Minimalism & Deponder 0.5.0 Integration (`com.cinpe.deponder.*`)**:
+   - `GraphSheet` represents a single `memoryId`: no internal memory switcher tabs/chips, no duplicated summary header, no shrink button, no inner bordered rectangle (`Surface`/`BorderStroke`), and sheet-level `✕` close lives in `BottomSheetScene`'s `dragHandle` chrome bar.
+   - Wrap each `DeponderDefaultRubber` in `key(edgeKey)` and each node in `key(node.id)` inside `Box(Modifier.deponderRoot(state))`, translating planet `y` by `Δheight / 2` in `onSizeChanged` when viewport height transitions between half-sheet (`50%`) and expanded (`92%`).
    - Enforce deduplicated node IDs, zero self-loops, and single merged edge per unordered pair `(a, b)`.
    - Isolate empty-canvas drags via a background sibling pointer consumer and `NestedScrollConnection` so `ModalBottomSheet` does not dismiss accidentally during graph interaction.
    - Never mutate layout constraints per drag frame or move Compose physics/gesture state into ViewModel MVI reducers.
-4. **Storage Boundaries (`Jetpack Room` & `DataStore`)**:
+5. **Storage Boundaries (`Jetpack Room` & `DataStore`)**:
    - Persist memories, relation triples, `analysisSource`, and `telemetryBadge` exclusively in `EngramDatabase` / `RoomMemoryStore` via cold `Flow`s in `MemoryDao` (`@Transaction`, `WAL`, `@Relation`) for on-demand table-tracked invalidation.
    - Never update `MemoryEntity` analysis fields with `@Insert(onConflict = REPLACE)`, which deletes rows and cascades to `memory_relations`; use targeted `@Query("UPDATE ...")` mutations.
    - Use `DataStore<Preferences>` solely for lightweight configuration switches (inference mode, selected model ID, server base URL).

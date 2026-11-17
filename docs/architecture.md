@@ -6,12 +6,13 @@
 flowchart TB
     Contracts["contracts/*.schema.json\n(Single Source of Truth)"]
 
-    subgraph AndroidApp[":app (Kotlin + Compose M3 + Nav3 + Koin 4.2)"]
-        Capture["CaptureScreen\n(Single-Screen Timeline, In-Place Stream & Raw Card, Calendar Confirm)"]
-        Graph["GraphScreen (Expandable ModalBottomSheet)\n(50% <-> 92% Handle, Gesture Isolation, Deponder 0.5.0)"]
+    subgraph AndroidApp[":app (Kotlin + Compose M3 Expressive + Nav3 + Koin 4.2)"]
+        Capture["CaptureScreen\n(Bulleted Timeline, Symmetrical Composer, Calendar Confirm)"]
+        RawSheet["RawMemorySheet (ModalBottomSheet)\n(De-emphasized Full Raw Note & Copy)"]
+        Graph["GraphScreen (Single-Memory Expandable Sheet)\n(Frameless Bounds, Δh/2 Recentering, Deponder 0.5.0)"]
         EngineSheet["EngineBottomSheet\n(Edge/Cloud Mode Switch, Resumable Range Download, RSS & Unload)"]
 
-        Analyzer["MemoryAnalyzer\n(JSON Schema Parser + Heuristic Fallback)"]
+        Analyzer["MemoryAnalyzer\n(JSON Schema + Bullet Normalizer + Fallback)"]
         Router["UnifiedInferenceRouter"]
 
         SQLite["EngramDatabase / RoomMemoryStore\n(Room WAL + @Relation Cold Flow)"]
@@ -35,6 +36,7 @@ flowchart TB
     Router -->|OFFLINE_EDGE / fallback| Manager
     Router -->|Completed + AnalysisSource| SQLite
     SQLite --> Capture
+    SQLite --> RawSheet
     SQLite --> Graph
     EngineSheet -->|OkHttp Range + RandomAccessFile + .sha256| Manifest
     Manager --> JNI
@@ -70,11 +72,19 @@ stateDiagram-v2
 
 ---
 
-## 3. Expandable Sheet Gesture Isolation & Deponder 0.5.0 Invariants
+## 3. Single-Memory Frameless Sheet, Gesture Isolation & Deponder 0.5.0 Invariants
 
-1. **Two-Stage Sheet (`BottomSheetSceneStrategy`)**: Opens at `50%` `PartiallyExpanded`, supports dragging or single-tapping the `48dp` `DragHandle` to toggle `92%` `Expanded`, and provides a close button when expanded alongside system Predictive Back.
-2. **Canvas Gesture Isolation**: A sibling background drag absorber and `NestedScrollConnection` inside `GraphScreen` consume missed drags on empty canvas without intercepting node-level `.deponderDrag()`, preventing accidental sheet dismissal while keeping header/handle drags responsive.
-3. **Graph Invariants (`MemoryAnalyzer.sanitizeRelations`)**:
+1. **Two-Stage Frameless `GraphSheet` (`BottomSheetSceneStrategy`)**: Opens strictly bound to a single `memoryId` at `50%` `PartiallyExpanded`, supports dragging or single-tapping the `48dp` `DragHandle` to toggle `92%` `Expanded`, and places the sheet-level close (`✕`) action cleanly inside the top `dragHandle` bar without duplicating card summaries, tabs, or inner border rectangles.
+2. **Dynamic Vertical Recentering (`Δheight / 2`)**: `GraphScreen` measures height transitions inside `deponderRoot`'s `onSizeChanged` and shifts every node's vertical coordinate by `Δheight / 2`, keeping the force-directed layout centered across `50% <-> 92%` height changes and inline entity citation toggles.
+3. **Canvas Gesture Isolation**: A sibling background drag absorber and `NestedScrollConnection` inside `GraphScreen` consume missed drags on empty canvas without intercepting node-level `.deponderDrag()`, preventing accidental sheet dismissal while keeping handle drags responsive.
+4. **Graph Invariants (`MemoryAnalyzer.sanitizeRelations`)**:
    - Unique non-blank entity IDs under `deponderRoot`.
    - Zero self-loops (`source != target`).
    - At most one edge per unordered pair `(min(a,b), max(a,b))`, automatically merging opposing `(A -> B)` and `(B -> A)` pairs into `DeponderArrowMode.BOTH`.
+
+---
+
+## 4. Capture UI & Window-Inset Discipline
+
+1. **Summary-First Cards & De-emphasized Raw Text**: Timeline cards have no title and format multi-point AI summaries as concise `\n`-separated `• ` bullets without noisy seed/fallback card badges. Raw note text never expands inline and opens lazily via `RawMemorySheet`.
+2. **Symmetrical Composer & Zero Double Insets**: `NavDisplay` calls `consumeWindowInsets(innerPadding)` after `padding(innerPadding)` so `imePadding()` never double-counts bottom system bars; the composer embeds an optically centered `ArrowUpward` submit button inside a symmetrical container and dismisses IME on scroll or blank/card tap.
