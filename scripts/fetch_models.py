@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fetch MNN quantized model files from Engram gateway manifest or HuggingFace/ModelScope."""
+"""Fetch MNN quantized model files from Engram gateway manifest."""
 
 from __future__ import annotations
 
@@ -28,8 +28,13 @@ def download_file(url: str, dest: Path) -> str:
     return sha256.hexdigest()
 
 
+def verify_digest(name: str, digest: str, expected: str | None) -> None:
+    if expected is not None and digest != expected:
+        raise SystemExit(f"SHA-256 mismatch for {name}: got {digest}, expected {expected}")
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Download quantized MNN model bundles for Engram.")
+    parser = argparse.ArgumentParser(description="Download quantized MNN model bundle for Engram.")
     parser.add_argument("--model-id", default="qwen2.5-0.5b-instruct-mnn", help="Model ID from manifest")
     parser.add_argument("--manifest-url", default=DEFAULT_MANIFEST_URL, help="Gateway manifest URL")
     parser.add_argument("--out-dir", default="models", help="Local target directory")
@@ -45,11 +50,26 @@ def main() -> None:
         raise SystemExit(f"Model '{args.model_id}' not found. Available: {available}")
 
     model_dir = Path(args.out_dir) / args.model_id
+    downloaded_names: set[str] = set()
+    llm_config_url: str | None = None
+
     for f in target["files"]:
         digest = download_file(f["url"], model_dir / f["name"])
-        expected = f["sha256"]
-        if expected != "0" * 64 and digest != expected:
-            raise SystemExit(f"SHA-256 mismatch for {f['name']}: got {digest}, expected {expected}")
+        verify_digest(f["name"], digest, f.get("sha256"))
+        downloaded_names.add(f["name"])
+        if f["name"] == "llm_config.json":
+            llm_config_url = f["url"]
+
+    llm_config_path = model_dir / "llm_config.json"
+    if llm_config_path.exists() and llm_config_url:
+        try:
+            llm_cfg = json.loads(llm_config_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            llm_cfg = {}
+        embed_file = str(llm_cfg.get("embedding_file") or "").strip()
+        if embed_file and embed_file not in downloaded_names:
+            base_url = llm_config_url.rsplit("/", 1)[0]
+            download_file(f"{base_url}/{embed_file}", model_dir / embed_file)
 
     print(f"Model ready in {model_dir}")
     if args.adb_push:

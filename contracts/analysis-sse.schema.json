@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/cinpeCan/Engram/contracts/analysis-sse.schema.json",
+  "title": "AnalysisStreamContracts",
+  "description": "Cloud structured memory analysis SSE request and delta frame contracts shared between Engram Android and FastAPI gateway.",
+  "$defs": {
+    "AnalysisStreamRequest": {
+      "type": "object",
+      "required": ["content", "nowIso", "model"],
+      "additionalProperties": false,
+      "properties": {
+        "content": { "type": "string", "minLength": 1 },
+        "nowIso": { "type": "string", "minLength": 10 },
+        "model": { "type": "string", "minLength": 1 }
+      }
+    },
+    "AnalysisStreamChunk": {
+      "type": "object",
+      "required": ["delta", "done", "model", "latencyMs"],
+      "additionalProperties": false,
+      "properties": {
+        "delta": { "type": "string" },
+        "done": { "type": "boolean" },
+        "model": { "type": "string", "minLength": 1 },
+        "latencyMs": { "type": "integer", "minimum": 0 },
+        "error": { "type": ["string", "null"] }
+      }
+    }
+  }
+}
