@@ -28,7 +28,8 @@ echo "[engram] Building MNN + MNN-LLM arm64-v8a with 16KB flexible page size..."
    -DMNN_BUILD_LLM=true \
    -DMNN_SUPPORT_TRANSFORMER_FUSE=true \
    -DMNN_OPENCL=true \
-   -DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON"
+   -DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON \
+   -DCMAKE_SHARED_LINKER_FLAGS=-Wl,-z,max-page-size=16384"
 
 mkdir -p "$OUT_JNILIBS" "$OUT_INCLUDE/llm"
 find "$BUILD_DIR" -maxdepth 4 -name "libMNN.so" -exec cp {} "$OUT_JNILIBS/" \;

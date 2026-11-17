@@ -8,7 +8,8 @@ sealed interface EngineState {
     data class Ready(
         val modelId: String,
         val backendName: String,
-        val nativeHeapBytes: Long,
+        val residentMemoryBytes: Long,
+        val modelFootprintBytes: Long = 0L,
     ) : EngineState
 
     data class Generating(

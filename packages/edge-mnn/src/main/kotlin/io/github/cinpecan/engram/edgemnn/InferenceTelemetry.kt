@@ -7,6 +7,6 @@ data class InferenceTelemetry(
     val totalMs: Long,
     val generatedTokens: Int,
     val tokensPerSec: Double,
-    val nativeHeapMb: Double,
+    val residentMemoryMb: Double,
     val isRealMnn: Boolean,
 )

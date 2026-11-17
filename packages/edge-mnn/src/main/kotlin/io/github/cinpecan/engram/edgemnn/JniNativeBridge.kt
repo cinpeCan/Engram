@@ -14,7 +14,6 @@ class JniNativeBridge : NativeBridge {
         maxTokens: Int,
         callback: JniStreamCallbackProxy,
     )
-    private external fun nativeEmbed(handle: Long, text: String, dims: Int): FloatArray
 
     override fun hasRealMnnBackend(): Boolean = nativeHasRealMnnBackend()
 
@@ -45,9 +44,6 @@ class JniNativeBridge : NativeBridge {
             callback = JniStreamCallbackProxy(callback),
         )
     }
-
-    override fun embed(sessionHandle: Long, text: String, dims: Int): FloatArray =
-        nativeEmbed(sessionHandle, text, dims)
 
     @Keep
     private class JniStreamCallbackProxy(

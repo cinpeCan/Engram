@@ -41,6 +41,9 @@ class MnnEngineManager(
     private val _lastTelemetry = MutableStateFlow<InferenceTelemetry?>(null)
     override val lastTelemetry: StateFlow<InferenceTelemetry?> = _lastTelemetry.asStateFlow()
 
+    override val isBackendAvailable: Boolean
+        get() = nativeBridge.hasRealMnnBackend()
+
     @Volatile
     private var sessionHandle: Long = 0L
 
@@ -52,6 +55,7 @@ class MnnEngineManager(
 
     private var loadedModelId: String? = null
     private var loadedModelDir: String = ""
+    private var loadedFootprintBytes: Long = 0L
     private var uiHiddenUnloadJob: Job? = null
 
     override fun configureDefaultModel(modelId: String, modelDirPath: String) {
@@ -64,6 +68,16 @@ class MnnEngineManager(
             uiHiddenUnloadJob?.cancel()
             uiHiddenUnloadJob = null
             jniMutex.withLock {
+                if (!nativeBridge.hasRealMnnBackend()) {
+                    val msg = "未内置 MNN 原生推理库"
+                    _state.value = EngineState.Error(msg)
+                    return@withLock Result.failure(IllegalStateException(msg))
+                }
+                if (modelDirPath.isBlank()) {
+                    val msg = "本地模型权重尚未下载"
+                    _state.value = EngineState.Error(msg)
+                    return@withLock Result.failure(IllegalArgumentException(msg))
+                }
                 runCatching {
                     if (sessionHandle != 0L && loadedModelId == modelId && loadedModelDir == modelDirPath) {
                         configuredModelId = modelId
@@ -75,19 +89,27 @@ class MnnEngineManager(
                         nativeBridge.releaseSession(sessionHandle)
                         sessionHandle = 0L
                         loadedModelId = null
+                        loadedModelDir = ""
+                        loadedFootprintBytes = 0L
                     }
+                    val beforeBytes = memoryProvider.residentMemoryBytes()
                     _state.value = EngineState.Loading(modelId)
                     val handle = nativeBridge.createSession(modelDirPath)
                     check(handle != 0L) { "Native createSession returned null handle for $modelId" }
+                    val afterBytes = memoryProvider.residentMemoryBytes()
+                    val footprint = (afterBytes - beforeBytes).coerceAtLeast(0L)
+
                     sessionHandle = handle
                     loadedModelId = modelId
                     loadedModelDir = modelDirPath
                     configuredModelId = modelId
                     configuredModelDir = modelDirPath
+                    loadedFootprintBytes = footprint
                     _state.value = EngineState.Ready(
                         modelId = modelId,
-                        backendName = resolveBackendName(modelDirPath),
-                        nativeHeapBytes = memoryProvider.nativeHeapAllocatedBytes(),
+                        backendName = BACKEND_NAME_MNN,
+                        residentMemoryBytes = afterBytes,
+                        modelFootprintBytes = footprint,
                     )
                 }.onFailure { err ->
                     _state.value = EngineState.Error(err.message ?: "Failed to load model $modelId")
@@ -107,8 +129,7 @@ class MnnEngineManager(
                 jniMutex.withLock {
                     ensureDefaultSessionLocked()
                     val activeId = loadedModelId ?: DEFAULT_SESSION_ID
-                    val backendName = resolveBackendName(loadedModelDir)
-                    _state.value = EngineState.Generating(activeId, backendName)
+                    _state.value = EngineState.Generating(activeId, BACKEND_NAME_MNN)
 
                     var ttft = 0L
                     var total = 1L
@@ -136,15 +157,15 @@ class MnnEngineManager(
                     } else {
                         0.0
                     }
-                    val heapBytes = memoryProvider.nativeHeapAllocatedBytes()
+                    val residentBytes = memoryProvider.residentMemoryBytes()
                     val telemetry = InferenceTelemetry(
-                        engineLabel = backendName,
+                        engineLabel = BACKEND_NAME_MNN,
                         modelId = activeId,
                         ttftMs = ttft,
                         totalMs = total,
                         generatedTokens = tokenCount,
                         tokensPerSec = tokPerSec,
-                        nativeHeapMb = heapBytes / (1024.0 * 1024.0),
+                        residentMemoryMb = residentBytes / (1024.0 * 1024.0),
                         isRealMnn = nativeBridge.hasRealMnnBackend(),
                     )
                     capturedTelemetry = telemetry
@@ -153,8 +174,9 @@ class MnnEngineManager(
                     if (sessionHandle != 0L) {
                         _state.value = EngineState.Ready(
                             modelId = activeId,
-                            backendName = backendName,
-                            nativeHeapBytes = heapBytes,
+                            backendName = BACKEND_NAME_MNN,
+                            residentMemoryBytes = residentBytes,
+                            modelFootprintBytes = loadedFootprintBytes,
                         )
                     }
                 }
@@ -171,27 +193,17 @@ class MnnEngineManager(
         producer.join()
 
         val telemetry = capturedTelemetry ?: InferenceTelemetry(
-            engineLabel = resolveBackendName(loadedModelDir),
+            engineLabel = BACKEND_NAME_MNN,
             modelId = loadedModelId ?: DEFAULT_SESSION_ID,
             ttftMs = 0L,
             totalMs = 1L,
             generatedTokens = 0,
             tokensPerSec = 0.0,
-            nativeHeapMb = memoryProvider.nativeHeapAllocatedBytes() / (1024.0 * 1024.0),
+            residentMemoryMb = memoryProvider.residentMemoryBytes() / (1024.0 * 1024.0),
             isRealMnn = nativeBridge.hasRealMnnBackend(),
         )
         send(StreamChunk.Completed(fullBuilder.toString(), telemetry))
     }
-
-    override suspend fun embedText(text: String, dims: Int): FloatArray =
-        withContext(serialDispatcher) {
-            uiHiddenUnloadJob?.cancel()
-            uiHiddenUnloadJob = null
-            jniMutex.withLock {
-                ensureDefaultSessionLocked()
-                nativeBridge.embed(sessionHandle, text, dims)
-            }
-        }
 
     override suspend fun unload(reason: UnloadReason): Long =
         withContext(serialDispatcher) {
@@ -200,16 +212,18 @@ class MnnEngineManager(
             jniMutex.withLock {
                 val handle = sessionHandle
                 if (handle == 0L) {
+                    loadedFootprintBytes = 0L
                     _state.value = EngineState.Unloaded
                     return@withLock 0L
                 }
-                val beforeBytes = memoryProvider.nativeHeapAllocatedBytes()
+                val beforeBytes = memoryProvider.residentMemoryBytes()
                 _state.value = EngineState.Releasing(reason)
                 nativeBridge.releaseSession(handle)
                 sessionHandle = 0L
                 loadedModelId = null
                 loadedModelDir = ""
-                val afterBytes = memoryProvider.nativeHeapAllocatedBytes()
+                loadedFootprintBytes = 0L
+                val afterBytes = memoryProvider.residentMemoryBytes()
                 _state.value = EngineState.Unloaded
                 (beforeBytes - afterBytes).coerceAtLeast(0L)
             }
@@ -242,34 +256,42 @@ class MnnEngineManager(
         }
     }
 
-    override fun currentNativeHeapBytes(): Long = memoryProvider.nativeHeapAllocatedBytes()
+    override fun currentMemoryBytes(): Long = memoryProvider.residentMemoryBytes()
 
     private fun ensureDefaultSessionLocked() {
         if (sessionHandle != 0L) return
+        if (!nativeBridge.hasRealMnnBackend()) {
+            error("未内置 MNN 原生推理库")
+        }
         val id = loadedModelId ?: configuredModelId
         val dir = loadedModelDir.ifBlank { configuredModelDir }
+        if (dir.isBlank()) {
+            error("端侧 MNN 模型尚未加载")
+        }
+        val beforeBytes = memoryProvider.residentMemoryBytes()
         _state.value = EngineState.Loading(id)
         val handle = nativeBridge.createSession(dir)
-        check(handle != 0L) { "Native createSession failed during lazy initialization" }
+        if (handle == 0L) {
+            _state.value = EngineState.Error("MNN 模型会话初始化失败：$id")
+            error("Native createSession failed during lazy initialization")
+        }
+        val afterBytes = memoryProvider.residentMemoryBytes()
+        val footprint = (afterBytes - beforeBytes).coerceAtLeast(0L)
         sessionHandle = handle
         loadedModelId = id
         loadedModelDir = dir
+        loadedFootprintBytes = footprint
         _state.value = EngineState.Ready(
             modelId = id,
-            backendName = resolveBackendName(dir),
-            nativeHeapBytes = memoryProvider.nativeHeapAllocatedBytes(),
+            backendName = BACKEND_NAME_MNN,
+            residentMemoryBytes = afterBytes,
+            modelFootprintBytes = footprint,
         )
     }
 
-    private fun resolveBackendName(modelDir: String): String =
-        if (nativeBridge.hasRealMnnBackend() && modelDir.isNotBlank()) {
-            "MNN-LLM (ARM64)"
-        } else {
-            "MNN JNI Edge Runtime"
-        }
-
     companion object {
-        const val DEFAULT_SESSION_ID: String = "engram-edge-default"
+        const val DEFAULT_SESSION_ID: String = "qwen2.5-0.5b-instruct-mnn"
+        const val BACKEND_NAME_MNN: String = "MNN-LLM (ARM64)"
         const val DEFAULT_UI_HIDDEN_GRACE_MS: Long = 15_000L
 
         const val TRIM_MEMORY_RUNNING_CRITICAL: Int = 15

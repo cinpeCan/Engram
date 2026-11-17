@@ -16,5 +16,4 @@ interface NativeBridge {
         maxTokens: Int,
         callback: NativeStreamCallback,
     )
-    fun embed(sessionHandle: Long, text: String, dims: Int): FloatArray
 }

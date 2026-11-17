@@ -17,19 +17,22 @@ import org.junit.Test
 @OptIn(ExperimentalCoroutinesApi::class)
 class MnnEngineManagerTest {
 
-    private class FakeNativeBridge : NativeBridge {
+    private class FakeNativeBridge(
+        private val backendAvailable: Boolean = true,
+    ) : NativeBridge {
         private val nextHandle = AtomicLong(100L)
         val releaseCount = AtomicInteger(0)
         val activeConcurrency = AtomicInteger(0)
         val maxObservedConcurrency = AtomicInteger(0)
-        var simulatedHeapBytes: Long = 512L * 1024 * 1024
+        var simulatedRssBytes: Long = 512L * 1024 * 1024
         val createdModelDirs = mutableListOf<String>()
 
-        override fun hasRealMnnBackend(): Boolean = false
+        override fun hasRealMnnBackend(): Boolean = backendAvailable
 
         override fun createSession(modelDirPath: String): Long {
+            if (!backendAvailable || modelDirPath.isBlank()) return 0L
             createdModelDirs.add(modelDirPath)
-            simulatedHeapBytes = 768L * 1024 * 1024
+            simulatedRssBytes = 768L * 1024 * 1024
             return nextHandle.getAndIncrement()
         }
 
@@ -37,7 +40,7 @@ class MnnEngineManagerTest {
 
         override fun releaseSession(sessionHandle: Long) {
             releaseCount.incrementAndGet()
-            simulatedHeapBytes = 128L * 1024 * 1024
+            simulatedRssBytes = 128L * 1024 * 1024
         }
 
         override fun generateStream(
@@ -57,16 +60,41 @@ class MnnEngineManagerTest {
                 activeConcurrency.decrementAndGet()
             }
         }
+    }
 
-        override fun embed(sessionHandle: Long, text: String, dims: Int): FloatArray {
-            val current = activeConcurrency.incrementAndGet()
-            maxObservedConcurrency.updateAndGet { prev -> maxOf(prev, current) }
-            try {
-                return FloatArray(dims) { if (it == 0) 1f else 0f }
-            } finally {
-                activeConcurrency.decrementAndGet()
-            }
-        }
+    @Test
+    fun refusesBlankDirAndMissingBackendWithoutFakingReadyState() = runTest {
+        val noBackendBridge = FakeNativeBridge(backendAvailable = false)
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val noBackendManager = MnnEngineManager(
+            nativeBridge = noBackendBridge,
+            memoryProvider = { noBackendBridge.simulatedRssBytes },
+            serialDispatcher = dispatcher,
+            lifecycleScope = this,
+        )
+
+        val missingBackendResult = noBackendManager.loadModel("qwen-0.5b", "/tmp/models/qwen")
+        assertTrue(missingBackendResult.isFailure)
+        assertTrue(noBackendManager.state.value is EngineState.Error)
+        assertTrue(noBackendBridge.createdModelDirs.isEmpty())
+
+        val validBridge = FakeNativeBridge(backendAvailable = true)
+        val blankDirManager = MnnEngineManager(
+            nativeBridge = validBridge,
+            memoryProvider = { validBridge.simulatedRssBytes },
+            serialDispatcher = dispatcher,
+            lifecycleScope = this,
+        )
+
+        val blankDirResult = blankDirManager.loadModel("qwen-0.5b", "")
+        assertTrue(blankDirResult.isFailure)
+        assertTrue(blankDirManager.state.value is EngineState.Error)
+        assertTrue(validBridge.createdModelDirs.isEmpty())
+
+        val streamError = runCatching {
+            blankDirManager.streamGenerate("hello").toList()
+        }.exceptionOrNull()
+        assertTrue(streamError is IllegalStateException)
     }
 
     @Test
@@ -75,7 +103,7 @@ class MnnEngineManagerTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val manager = MnnEngineManager(
             nativeBridge = bridge,
-            memoryProvider = { bridge.simulatedHeapBytes },
+            memoryProvider = { bridge.simulatedRssBytes },
             serialDispatcher = dispatcher,
             lifecycleScope = this,
             coalescer = TokenStreamCoalescer(windowMs = 10L),
@@ -84,12 +112,15 @@ class MnnEngineManagerTest {
         assertEquals(EngineState.Unloaded, manager.state.value)
         val loadResult = manager.loadModel("qwen-0.5b", "/tmp/models/qwen")
         assertTrue(loadResult.isSuccess)
-        assertTrue(manager.state.value is EngineState.Ready)
+        val readyState = manager.state.value as EngineState.Ready
+        assertEquals(768L * 1024 * 1024, readyState.residentMemoryBytes)
+        assertEquals(256L * 1024 * 1024, readyState.modelFootprintBytes)
 
         val chunks = manager.streamGenerate("hello").toList()
         val completed = chunks.filterIsInstance<StreamChunk.Completed>().single()
         assertEquals("测试输出", completed.fullText)
         assertEquals(12L, completed.telemetry.ttftMs)
+        assertTrue(completed.telemetry.isRealMnn)
 
         val reclaimed = manager.unload(UnloadReason.USER_REQUESTED)
         assertEquals(EngineState.Unloaded, manager.state.value)
@@ -103,7 +134,7 @@ class MnnEngineManagerTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val manager = MnnEngineManager(
             nativeBridge = bridge,
-            memoryProvider = { bridge.simulatedHeapBytes },
+            memoryProvider = { bridge.simulatedRssBytes },
             serialDispatcher = dispatcher,
             lifecycleScope = this,
         )
@@ -111,11 +142,7 @@ class MnnEngineManagerTest {
         manager.loadModel("qwen-0.5b", "/tmp/models/qwen")
         val jobs = (1..4).map { idx ->
             async {
-                if (idx % 2 == 0) {
-                    manager.embedText("query-$idx", dims = 16)
-                } else {
-                    manager.streamGenerate("prompt-$idx").toList()
-                }
+                manager.streamGenerate("prompt-$idx").toList()
             }
         }
         jobs.awaitAll()
@@ -129,7 +156,7 @@ class MnnEngineManagerTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val manager = MnnEngineManager(
             nativeBridge = bridge,
-            memoryProvider = { bridge.simulatedHeapBytes },
+            memoryProvider = { bridge.simulatedRssBytes },
             serialDispatcher = dispatcher,
             lifecycleScope = this,
             uiHiddenGraceMs = 1_000L,
@@ -156,7 +183,7 @@ class MnnEngineManagerTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val manager = MnnEngineManager(
             nativeBridge = bridge,
-            memoryProvider = { bridge.simulatedHeapBytes },
+            memoryProvider = { bridge.simulatedRssBytes },
             serialDispatcher = dispatcher,
             lifecycleScope = this,
             coalescer = TokenStreamCoalescer(windowMs = 10L),
