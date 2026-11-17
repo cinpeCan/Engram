@@ -12,6 +12,7 @@ import io.github.cinpecan.engram.domain.analyzer.MemoryAnalyzer
 import io.github.cinpecan.engram.edgemnn.EdgeAiEngine
 import io.github.cinpecan.engram.edgemnn.MnnEngineManager
 import io.github.cinpecan.engram.ui.capture.CaptureRoute
+import io.github.cinpecan.engram.ui.capture.RawMemoryRoute
 import io.github.cinpecan.engram.ui.engine.EngineBottomSheetRoute
 import io.github.cinpecan.engram.ui.graph.GraphRoute
 import io.github.cinpecan.engram.ui.navigation.BottomSheetSceneStrategy
@@ -19,11 +20,13 @@ import io.github.cinpecan.engram.ui.navigation.EngramNavKey
 import io.github.cinpecan.engram.ui.viewmodel.CaptureViewModel
 import io.github.cinpecan.engram.ui.viewmodel.EngineViewModel
 import io.github.cinpecan.engram.ui.viewmodel.GraphViewModel
+import io.github.cinpecan.engram.ui.viewmodel.RawMemoryViewModel
 import java.util.concurrent.TimeUnit
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
 import org.koin.android.ext.koin.androidContext
 import org.koin.core.annotation.KoinExperimentalAPI
+import org.koin.core.module.dsl.viewModel
 import org.koin.core.module.dsl.viewModelOf
 import org.koin.dsl.module
 import org.koin.dsl.navigation3.navigation
@@ -80,8 +83,19 @@ val dataModule = module {
 @OptIn(KoinExperimentalAPI::class)
 val uiModule = module {
     viewModelOf(::CaptureViewModel)
-    viewModelOf(::GraphViewModel)
     viewModelOf(::EngineViewModel)
+    viewModel { (memoryId: String) ->
+        GraphViewModel(
+            memoryId = memoryId,
+            memoryRepository = get(),
+        )
+    }
+    viewModel { (memoryId: String) ->
+        RawMemoryViewModel(
+            memoryId = memoryId,
+            memoryRepository = get(),
+        )
+    }
 
     navigation<EngramNavKey.Capture> {
         CaptureRoute()
@@ -90,7 +104,13 @@ val uiModule = module {
     navigation<EngramNavKey.GraphSheet>(
         metadata = BottomSheetSceneStrategy.bottomSheet(expandable = true),
     ) { route ->
-        GraphRoute(initialMemoryId = route.initialMemoryId)
+        GraphRoute(memoryId = route.memoryId)
+    }
+
+    navigation<EngramNavKey.RawMemorySheet>(
+        metadata = BottomSheetSceneStrategy.bottomSheet(expandable = false),
+    ) { route ->
+        RawMemoryRoute(memoryId = route.memoryId)
     }
 
     navigation<EngramNavKey.EngineSheet>(

@@ -2,12 +2,17 @@ package io.github.cinpecan.engram.ui.theme
 
 import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.material.ripple.RippleAlpha
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.LocalRippleConfiguration
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.RippleConfiguration
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 
@@ -33,6 +38,16 @@ private val LightColorScheme = lightColorScheme(
     surfaceVariant = LightSurfaceVariant,
 )
 
+private val ExpressiveSubtleRipple = RippleConfiguration(
+    rippleAlpha = RippleAlpha(
+        draggedAlpha = 0.10f,
+        focusedAlpha = 0.08f,
+        hoveredAlpha = 0.06f,
+        pressedAlpha = 0.08f,
+    ),
+)
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun EngramTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
@@ -51,6 +66,9 @@ fun EngramTheme(
     MaterialTheme(
         colorScheme = colorScheme,
         typography = Typography,
-        content = content,
-    )
+    ) {
+        CompositionLocalProvider(LocalRippleConfiguration provides ExpressiveSubtleRipple) {
+            content()
+        }
+    }
 }

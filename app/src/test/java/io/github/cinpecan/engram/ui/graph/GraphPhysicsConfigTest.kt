@@ -1,9 +1,18 @@
 package io.github.cinpecan.engram.ui.graph
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class GraphPhysicsConfigTest {
+
+    @Test
+    fun computeRecenterDeltaYPx_shiftsCentroidByHalfHeightDeltaAndSkipsInitialLayout() {
+        assertEquals(0f, computeRecenterDeltaYPx(previousHeightPx = 0f, newHeightPx = 800f), 0.001f)
+        assertEquals(0f, computeRecenterDeltaYPx(previousHeightPx = 800f, newHeightPx = 800.5f), 0.001f)
+        assertEquals(200f, computeRecenterDeltaYPx(previousHeightPx = 600f, newHeightPx = 1000f), 0.001f)
+        assertEquals(-200f, computeRecenterDeltaYPx(previousHeightPx = 1000f, newHeightPx = 600f), 0.001f)
+    }
 
     @Test
     fun buildGraphRootPhysics_enforcesStrongFourWallContainment() {

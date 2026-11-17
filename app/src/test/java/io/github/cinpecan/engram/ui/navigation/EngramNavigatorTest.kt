@@ -18,6 +18,12 @@ class EngramNavigatorTest {
             navigator.backStack,
         )
 
+        navigator.openRawMemory("m1")
+        assertEquals(
+            listOf<NavKey>(EngramNavKey.Capture, EngramNavKey.RawMemorySheet("m1")),
+            navigator.backStack,
+        )
+
         navigator.openOverlay(EngramNavKey.EngineSheet)
         assertEquals(
             listOf<NavKey>(EngramNavKey.Capture, EngramNavKey.EngineSheet),

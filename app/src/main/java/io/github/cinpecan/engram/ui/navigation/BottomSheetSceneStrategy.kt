@@ -2,10 +2,16 @@ package io.github.cinpecan.engram.ui.navigation
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.SheetState
@@ -17,6 +23,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -31,6 +38,7 @@ import androidx.navigation3.scene.OverlayScene
 import androidx.navigation3.scene.Scene
 import androidx.navigation3.scene.SceneStrategy
 import androidx.navigation3.scene.SceneStrategyScope
+import io.github.cinpecan.engram.ui.components.ExpressivePillSurface
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -67,23 +75,54 @@ internal class BottomSheetScene<T : Any>(
                     }
                     Box(
                         modifier = Modifier
-                            .sizeIn(minWidth = 72.dp, minHeight = 48.dp)
-                            .semantics { contentDescription = toggleLabel }
-                            .clickable(
-                                role = Role.Button,
-                                onClickLabel = toggleLabel,
-                            ) {
-                                scope.launch {
-                                    if (sheetState.currentValue == SheetValue.Expanded) {
-                                        sheetState.partialExpand()
-                                    } else {
-                                        sheetState.expand()
+                            .fillMaxWidth()
+                            .padding(horizontal = 10.dp, vertical = 2.dp),
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.Center)
+                                .sizeIn(minWidth = 72.dp, minHeight = 48.dp)
+                                .semantics { contentDescription = toggleLabel }
+                                .clickable(
+                                    role = Role.Button,
+                                    onClickLabel = toggleLabel,
+                                ) {
+                                    scope.launch {
+                                        if (sheetState.currentValue == SheetValue.Expanded) {
+                                            sheetState.partialExpand()
+                                        } else {
+                                            sheetState.expand()
+                                        }
                                     }
+                                },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            BottomSheetDefaults.DragHandle()
+                        }
+
+                        ExpressivePillSurface(
+                            onClick = {
+                                scope.launch {
+                                    sheetState.hide()
+                                    onBack()
                                 }
                             },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        BottomSheetDefaults.DragHandle()
+                            modifier = Modifier
+                                .align(Alignment.CenterEnd)
+                                .size(32.dp),
+                            restCorner = 16.dp,
+                            pressedCorner = 10.dp,
+                            containerColor = Color.Transparent,
+                            pressedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                            contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                            contentDescription = "关闭弹窗",
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Close,
+                                contentDescription = null,
+                                modifier = Modifier.size(20.dp),
+                            )
+                        }
                     }
                 } else {
                     BottomSheetDefaults.DragHandle()

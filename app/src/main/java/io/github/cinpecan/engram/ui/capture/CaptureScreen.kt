@@ -1,27 +1,32 @@
 package io.github.cinpecan.engram.ui.capture
 
-import android.content.ClipData
-import android.content.ClipboardManager
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -29,29 +34,22 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.Send
+import androidx.compose.material.icons.automirrored.rounded.Subject
 import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.Hub
+import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.CalendarMonth
-import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Hub
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
-import androidx.compose.material3.AssistChip
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.FilledIconButton
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -61,15 +59,23 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.cinpecan.engram.domain.agent.CalendarToolExecutor
 import io.github.cinpecan.engram.domain.model.AnalysisSource
@@ -78,6 +84,8 @@ import io.github.cinpecan.engram.domain.model.MemoryAnalysisStatus
 import io.github.cinpecan.engram.domain.model.MemoryItem
 import io.github.cinpecan.engram.domain.model.StreamingPreviewState
 import io.github.cinpecan.engram.ui.components.CollapsibleBottomConsoleLayout
+import io.github.cinpecan.engram.ui.components.ExpressiveCardSurface
+import io.github.cinpecan.engram.ui.components.ExpressivePillSurface
 import io.github.cinpecan.engram.ui.navigation.EngramNavigator
 import io.github.cinpecan.engram.ui.navigation.LocalEngramNavigator
 import io.github.cinpecan.engram.ui.viewmodel.CaptureEffect
@@ -125,15 +133,12 @@ fun CaptureRoute(
         isSubmitting = isSubmitting,
         onIntent = viewModel::onIntent,
         onOpenGraph = navigator::openGraphForMemory,
-        onCopyRaw = { rawText ->
-            val clipboard = context.getSystemService(ClipboardManager::class.java)
-            clipboard?.setPrimaryClip(ClipData.newPlainText("engram_raw", rawText))
-            navigator.showMessage("已复制原文到剪贴板")
-        },
+        onOpenRawMemory = navigator::openRawMemory,
         modifier = modifier,
     )
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun CaptureScreen(
     memories: List<MemoryItem>,
@@ -142,31 +147,40 @@ fun CaptureScreen(
     isSubmitting: Boolean,
     onIntent: (CaptureIntent) -> Unit,
     onOpenGraph: (String) -> Unit,
-    onCopyRaw: (String) -> Unit,
+    onOpenRawMemory: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
     var isInputFocused by remember { mutableStateOf(false) }
+    val isImeVisible = WindowInsets.isImeVisible
+
+    val dismissKeyboard: () -> Unit = {
+        focusManager.clearFocus()
+        keyboardController?.hide()
+    }
 
     val isInputEmpty = inputText.isEmpty()
-    val lockConsoleExpanded = inputText.isNotBlank() || isSubmitting
-    val fieldCornerRadius by animateDpAsState(
-        targetValue = if (isInputEmpty) 28.dp else 20.dp,
-        animationSpec = spring(dampingRatio = 0.8f, stiffness = 380f),
-        label = "inputFieldCorner",
-    )
+    val lockConsoleExpanded = inputText.isNotBlank() || isSubmitting || isInputFocused
 
     CollapsibleBottomConsoleLayout(
         lockExpanded = lockConsoleExpanded,
         onUserScroll = {
-            if (isInputFocused && inputText.isBlank()) {
-                focusManager.clearFocus()
+            if (isInputFocused || isImeVisible) {
+                dismissKeyboard()
             }
         },
+        extraBottomListPadding = 8.dp,
         modifier = modifier,
         listContent = { bottomContentPadding ->
             LazyColumn(
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pointerInput(isInputFocused, isImeVisible) {
+                        if (isInputFocused || isImeVisible) {
+                            detectTapGestures { dismissKeyboard() }
+                        }
+                    },
                 contentPadding = PaddingValues(
                     start = 16.dp,
                     top = 12.dp,
@@ -179,8 +193,10 @@ fun CaptureScreen(
                     MemoryTimelineCard(
                         memory = memory,
                         streamingPreview = streamingPreviews[memory.id],
+                        isKeyboardActive = isInputFocused || isImeVisible,
+                        onDismissKeyboard = dismissKeyboard,
                         onOpenGraph = { onOpenGraph(memory.id) },
-                        onCopyRaw = { onCopyRaw(memory.content) },
+                        onOpenRawMemory = { onOpenRawMemory(memory.id) },
                         onAddCalendar = { proposal ->
                             onIntent(
                                 CaptureIntent.RequestAddCalendar(
@@ -194,100 +210,229 @@ fun CaptureScreen(
             }
         },
         consoleContent = {
-            Surface(
-                tonalElevation = 3.dp,
-                shadowElevation = 8.dp,
-                shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.background)
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .navigationBarsPadding()
-                        .padding(horizontal = 12.dp, vertical = 10.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    AnimatedVisibility(visible = isInputEmpty) {
-                        LazyRow(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            item {
-                                AssistChip(
-                                    onClick = { onIntent(CaptureIntent.FillSample(SAMPLE_RELATION_NOTE)) },
-                                    leadingIcon = {
-                                        Icon(
-                                            imageVector = Icons.Rounded.Hub,
-                                            contentDescription = null,
-                                            modifier = Modifier.size(16.dp),
-                                        )
-                                    },
-                                    label = {
-                                        Text(
-                                            text = "填入多方关系示例",
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                        )
-                                    },
-                                )
-                            }
-                            item {
-                                AssistChip(
-                                    onClick = { onIntent(CaptureIntent.FillSample(SAMPLE_CALENDAR_NOTE)) },
-                                    leadingIcon = {
-                                        Icon(
-                                            imageVector = Icons.Rounded.CalendarMonth,
-                                            contentDescription = null,
-                                            modifier = Modifier.size(16.dp),
-                                        )
-                                    },
-                                    label = {
-                                        Text(
-                                            text = "填入日程提取示例",
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                        )
-                                    },
-                                )
+                AnimatedVisibility(visible = isInputEmpty) {
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        item {
+                            ExpressivePillSurface(
+                                onClick = { onIntent(CaptureIntent.FillSample(SAMPLE_RELATION_NOTE)) },
+                                restCorner = 16.dp,
+                                pressedCorner = 10.dp,
+                                containerColor = MaterialTheme.colorScheme.surface,
+                                pressedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
+                                contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                border = BorderStroke(
+                                    width = 0.75.dp,
+                                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.75f),
+                                ),
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Hub,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(15.dp),
+                                    )
+                                    Text(
+                                        text = "填入多方关系示例",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
                             }
                         }
-                    }
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = if (isInputEmpty) Alignment.CenterVertically else Alignment.Bottom,
-                    ) {
-                        OutlinedTextField(
-                            value = inputText,
-                            onValueChange = { onIntent(CaptureIntent.UpdateInput(it)) },
-                            modifier = Modifier
-                                .weight(1f)
-                                .onFocusChanged { isInputFocused = it.isFocused },
-                            placeholder = {
-                                Text(
-                                    text = "记下一段闪念…",
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                            },
-                            minLines = 1,
-                            maxLines = if (isInputEmpty) 1 else 4,
-                            shape = RoundedCornerShape(fieldCornerRadius),
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        FilledIconButton(
-                            onClick = { onIntent(CaptureIntent.SubmitCapture) },
-                            enabled = inputText.isNotBlank() && !isSubmitting,
-                            modifier = Modifier.size(48.dp),
-                        ) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Rounded.Send,
-                                contentDescription = "保存印迹",
-                            )
+                        item {
+                            ExpressivePillSurface(
+                                onClick = { onIntent(CaptureIntent.FillSample(SAMPLE_CALENDAR_NOTE)) },
+                                restCorner = 16.dp,
+                                pressedCorner = 10.dp,
+                                containerColor = MaterialTheme.colorScheme.surface,
+                                pressedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
+                                contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                border = BorderStroke(
+                                    width = 0.75.dp,
+                                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.75f),
+                                ),
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.CalendarMonth,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(15.dp),
+                                    )
+                                    Text(
+                                        text = "填入日程提取示例",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            }
                         }
                     }
                 }
+
+                UnifiedCaptureComposer(
+                    inputText = inputText,
+                    isInputFocused = isInputFocused,
+                    isSubmitting = isSubmitting,
+                    onFocusChanged = { isInputFocused = it },
+                    onValueChange = { onIntent(CaptureIntent.UpdateInput(it)) },
+                    onSubmit = {
+                        onIntent(CaptureIntent.SubmitCapture)
+                        dismissKeyboard()
+                    },
+                )
             }
         },
     )
+}
+
+@Composable
+private fun UnifiedCaptureComposer(
+    inputText: String,
+    isInputFocused: Boolean,
+    isSubmitting: Boolean,
+    onFocusChanged: (Boolean) -> Unit,
+    onValueChange: (String) -> Unit,
+    onSubmit: () -> Unit,
+) {
+    val density = LocalDensity.current
+    val textMeasurer = rememberTextMeasurer()
+    val textStyle = MaterialTheme.typography.bodyLarge.copy(
+        color = MaterialTheme.colorScheme.onSurface,
+    )
+
+    val borderColor by animateColorAsState(
+        targetValue = if (isInputFocused) {
+            MaterialTheme.colorScheme.primary
+        } else {
+            MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.85f)
+        },
+        animationSpec = spring(dampingRatio = 1.0f, stiffness = 2400f),
+        label = "composerBorderColor",
+    )
+
+    val canSubmit = inputText.isNotBlank() && !isSubmitting
+
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+        val reservedSingleLineHorizontalPx = with(density) { 66.dp.roundToPx() }
+        val singleLineAvailPx = (constraints.maxWidth - reservedSingleLineHorizontalPx).coerceAtLeast(1)
+        val measured = remember(inputText, singleLineAvailPx, textStyle) {
+            if (inputText.isEmpty()) {
+                null
+            } else {
+                textMeasurer.measure(
+                    text = inputText,
+                    style = textStyle,
+                    constraints = Constraints(maxWidth = singleLineAvailPx),
+                )
+            }
+        }
+        val isMultiline = inputText.contains('\n') || (measured?.lineCount ?: 0) > 1
+
+        val containerCorner by animateDpAsState(
+            targetValue = if (isMultiline) 20.dp else 26.dp,
+            animationSpec = spring(dampingRatio = 0.78f, stiffness = 500f),
+            label = "composerCorner",
+        )
+
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(containerCorner),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+            border = BorderStroke(
+                width = if (isInputFocused) 1.5.dp else 1.dp,
+                color = borderColor,
+            ),
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp),
+            ) {
+                BasicTextField(
+                    value = inputText,
+                    onValueChange = onValueChange,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .align(if (isMultiline) Alignment.TopStart else Alignment.CenterStart)
+                        .onFocusChanged { onFocusChanged(it.isFocused) }
+                        .padding(
+                            start = 16.dp,
+                            top = 12.dp,
+                            end = if (isMultiline) 16.dp else 50.dp,
+                            bottom = if (isMultiline) 44.dp else 12.dp,
+                        ),
+                    textStyle = textStyle,
+                    cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Default),
+                    maxLines = 5,
+                    decorationBox = { innerTextField ->
+                        Box(contentAlignment = Alignment.CenterStart) {
+                            if (inputText.isEmpty()) {
+                                Text(
+                                    text = "记下一段闪念…",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                            innerTextField()
+                        }
+                    },
+                )
+
+                ExpressivePillSurface(
+                    onClick = onSubmit,
+                    enabled = canSubmit,
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(end = 6.dp, bottom = 6.dp)
+                        .size(36.dp),
+                    restCorner = 18.dp,
+                    pressedCorner = 11.dp,
+                    containerColor = if (canSubmit) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f)
+                    },
+                    pressedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.85f),
+                    contentColor = if (canSubmit) {
+                        MaterialTheme.colorScheme.onPrimary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
+                    },
+                    contentDescription = "保存印迹",
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.ArrowUpward,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+            }
+        }
+    }
 }
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -295,8 +440,10 @@ fun CaptureScreen(
 private fun MemoryTimelineCard(
     memory: MemoryItem,
     streamingPreview: StreamingPreviewState?,
+    isKeyboardActive: Boolean,
+    onDismissKeyboard: () -> Unit,
     onOpenGraph: () -> Unit,
-    onCopyRaw: () -> Unit,
+    onOpenRawMemory: () -> Unit,
     onAddCalendar: (CalendarProposal) -> Unit,
 ) {
     var expanded by rememberSaveable(memory.id) { mutableStateOf(false) }
@@ -310,14 +457,19 @@ private fun MemoryTimelineCard(
         }
     }
 
-    Card(
-        onClick = { expanded = !expanded },
+    ExpressiveCardSurface(
+        onClick = {
+            if (isKeyboardActive) {
+                onDismissKeyboard()
+            } else {
+                expanded = !expanded
+            }
+        },
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surface,
-        ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.5.dp),
+        restCorner = 20.dp,
+        pressedCorner = 15.dp,
+        containerColor = MaterialTheme.colorScheme.surface,
+        shadowElevation = 0.5.dp,
     ) {
         Column(
             modifier = Modifier
@@ -331,7 +483,6 @@ private fun MemoryTimelineCard(
                 .padding(horizontal = 14.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            // Compact metadata header
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -430,7 +581,6 @@ private fun MemoryTimelineCard(
                         )
                         val partial = streamingPreview?.partialText.orEmpty()
                         if (partial.isNotBlank()) {
-                            // Optical inner radius: outer 20dp - 12dp padding = 8dp
                             Surface(
                                 shape = RoundedCornerShape(8.dp),
                                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
@@ -449,33 +599,25 @@ private fun MemoryTimelineCard(
                     }
                 } else {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(
-                            text = memory.summary.ifBlank { memory.content },
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            maxLines = if (expanded) Int.MAX_VALUE else 2,
-                            overflow = TextOverflow.Ellipsis,
+                        SummaryBulletList(
+                            summary = memory.summary.ifBlank { memory.content },
+                            expanded = expanded,
                         )
 
-                        if (memory.telemetryBadge.isNotBlank()) {
-                            val isModelDriven = memory.analysisSource == AnalysisSource.MNN_EDGE ||
-                                memory.analysisSource == AnalysisSource.CLOUD_SSE
+                        val showTelemetryBadge = memory.telemetryBadge.isNotBlank() && (
+                            memory.analysisSource == AnalysisSource.MNN_EDGE ||
+                                memory.analysisSource == AnalysisSource.CLOUD_SSE ||
+                                memory.telemetryBadge.contains("云端")
+                            )
+                        if (showTelemetryBadge) {
                             Surface(
                                 shape = RoundedCornerShape(8.dp),
-                                color = if (isModelDriven) {
-                                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f)
-                                } else {
-                                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
-                                },
+                                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f),
                             ) {
                                 Text(
                                     text = memory.telemetryBadge,
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = if (isModelDriven) {
-                                        MaterialTheme.colorScheme.onPrimaryContainer
-                                    } else {
-                                        MaterialTheme.colorScheme.onSurfaceVariant
-                                    },
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
                                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
                                 )
                             }
@@ -514,64 +656,19 @@ private fun MemoryTimelineCard(
                     )
                 }
 
-                // In-place raw text expansion (replaces RawMemoryBottomSheet)
-                Surface(
-                    shape = RoundedCornerShape(8.dp),
-                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                Row(
                     modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Column(
-                        modifier = Modifier.padding(10.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(
-                                text = "原始记录 · ${memory.content.length} 字",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            IconButton(
-                                onClick = onCopyRaw,
-                                modifier = Modifier.size(28.dp),
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Rounded.ContentCopy,
-                                    contentDescription = "复制原文",
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(15.dp),
-                                )
-                            }
-                        }
-                        HorizontalDivider(
-                            thickness = 0.5.dp,
-                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f),
-                        )
-                        SelectionContainer {
-                            Text(
-                                text = memory.content,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurface,
-                            )
-                        }
-                    }
-                }
-
-                if (memory.relations.isNotEmpty()) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.Start,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Surface(
-                            shape = RoundedCornerShape(50),
-                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f),
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(50))
-                                .clickable(onClick = onOpenGraph),
+                    if (memory.relations.isNotEmpty()) {
+                        ExpressivePillSurface(
+                            onClick = onOpenGraph,
+                            restCorner = 16.dp,
+                            pressedCorner = 9.dp,
+                            containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f),
+                            pressedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                            contentColor = MaterialTheme.colorScheme.primary,
                         ) {
                             Row(
                                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
@@ -581,18 +678,86 @@ private fun MemoryTimelineCard(
                                 Icon(
                                     imageVector = Icons.Outlined.Hub,
                                     contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary,
                                     modifier = Modifier.size(14.dp),
                                 )
                                 Text(
-                                    text = "脉络图谱 (${memory.relations.size})",
+                                    text = "脉络 (${memory.relations.size})",
                                     style = MaterialTheme.typography.labelMedium,
                                     fontWeight = FontWeight.Medium,
-                                    color = MaterialTheme.colorScheme.primary,
                                 )
                             }
                         }
+                    } else {
+                        Spacer(modifier = Modifier.width(1.dp))
                     }
+
+                    ExpressivePillSurface(
+                        onClick = onOpenRawMemory,
+                        restCorner = 8.dp,
+                        pressedCorner = 6.dp,
+                        containerColor = Color.Transparent,
+                        pressedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f),
+                        contentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Rounded.Subject,
+                                contentDescription = null,
+                                modifier = Modifier.size(14.dp),
+                            )
+                            Text(
+                                text = "原文",
+                                style = MaterialTheme.typography.labelMedium,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SummaryBulletList(
+    summary: String,
+    expanded: Boolean,
+) {
+    val lines = remember(summary) {
+        summary.lines().map { it.trim() }.filter { it.isNotEmpty() }
+    }
+    if (lines.size <= 1 && !summary.trimStart().startsWith("•")) {
+        Text(
+            text = summary,
+            style = MaterialTheme.typography.bodyLarge.copy(lineHeight = 23.sp),
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = if (expanded) Int.MAX_VALUE else 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+    } else {
+        val visibleLines = if (expanded) lines else lines.take(3)
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            visibleLines.forEach { rawLine ->
+                val textBody = rawLine.removePrefix("•").removePrefix("·").trim()
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.Top,
+                ) {
+                    Text(
+                        text = "•",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.78f),
+                    )
+                    Text(
+                        text = textBody,
+                        style = MaterialTheme.typography.bodyLarge.copy(lineHeight = 22.sp),
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = if (expanded) Int.MAX_VALUE else 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
             }
         }
@@ -623,7 +788,7 @@ private fun ScheduleInlineStrip(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = 10.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
+                .padding(start = 10.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
@@ -652,15 +817,26 @@ private fun ScheduleInlineStrip(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            TextButton(
+            ExpressivePillSurface(
                 onClick = onAddCalendar,
-                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-                modifier = Modifier.height(30.dp),
+                restCorner = 12.dp,
+                pressedCorner = 7.dp,
+                containerColor = if (calendarSaved) {
+                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+                } else {
+                    Color.Transparent
+                },
+                pressedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
+                contentColor = if (calendarSaved) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.secondary
+                },
             ) {
                 Text(
                     text = if (calendarSaved) "已添至日历" else "添至日历",
                     style = MaterialTheme.typography.labelMedium,
-                    color = if (calendarSaved) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
                 )
             }
         }

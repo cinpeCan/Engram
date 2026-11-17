@@ -20,7 +20,10 @@ sealed interface EngramNavKey : NavKey {
     data object Capture : EngramNavKey
 
     @Serializable
-    data class GraphSheet(val initialMemoryId: String? = null) : Overlay
+    data class GraphSheet(val memoryId: String) : Overlay
+
+    @Serializable
+    data class RawMemorySheet(val memoryId: String) : Overlay
 
     @Serializable
     data object EngineSheet : Overlay
@@ -37,8 +40,12 @@ class EngramNavigator(
         messageChannel.trySend(message)
     }
 
-    fun openGraphForMemory(memoryId: String? = null) {
-        openOverlay(EngramNavKey.GraphSheet(initialMemoryId = memoryId))
+    fun openGraphForMemory(memoryId: String) {
+        openOverlay(EngramNavKey.GraphSheet(memoryId = memoryId))
+    }
+
+    fun openRawMemory(memoryId: String) {
+        openOverlay(EngramNavKey.RawMemorySheet(memoryId = memoryId))
     }
 
     fun openOverlay(overlay: EngramNavKey.Overlay) {

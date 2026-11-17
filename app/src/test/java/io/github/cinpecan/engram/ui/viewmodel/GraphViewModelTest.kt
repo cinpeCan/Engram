@@ -20,11 +20,13 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeout
 import okhttp3.OkHttpClient
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -76,17 +78,20 @@ class GraphViewModelTest {
     }
 
     @Test
-    fun bindMemoryAndSelectEntityDriveCanvasAndOnDemandCitations() = runTest {
+    fun bindsSingleMemorySelectsEntityAndReplaysGrowth() = runTest {
         val m1 = MemoryItem(
             id = "m1",
-            content = "老李向张姐提交合同草案",
-            summary = "老李提交合同草案",
+            content = "老李向张姐提交合同草案，张姐反馈给王总",
+            summary = "• 老李向张姐提交合同草案\n• 张姐反馈给王总",
             tags = listOf("商务合同"),
             createdAtMillis = 2_000L,
             analysisStatus = MemoryAnalysisStatus.READY,
             calendarProposal = null,
             calendarSaved = false,
-            relations = listOf(RelationTriple("r1", "m1", "老李", "张姐", "提交草案", false)),
+            relations = listOf(
+                RelationTriple("r1", "m1", "老李", "张姐", "提交草案", false),
+                RelationTriple("r2", "m1", "张姐", "王总", "同步进展", false),
+            ),
         )
         val m2 = MemoryItem(
             id = "m2",
@@ -97,28 +102,14 @@ class GraphViewModelTest {
             analysisStatus = MemoryAnalysisStatus.READY,
             calendarProposal = null,
             calendarSaved = false,
-            relations = listOf(RelationTriple("r2", "m2", "陈工", "刘敏", "验收", false)),
-        )
-        val m3NoRel = MemoryItem(
-            id = "m3",
-            content = "今天阳光很好",
-            summary = "今天阳光很好",
-            tags = emptyList(),
-            createdAtMillis = 1_000L,
-            analysisStatus = MemoryAnalysisStatus.READY,
-            calendarProposal = null,
-            calendarSaved = false,
-            relations = emptyList(),
+            relations = listOf(RelationTriple("r3", "m2", "陈工", "刘敏", "验收", false)),
         )
 
-        val store = FakeStore(listOf(m1, m2, m3NoRel))
+        val store = FakeStore(listOf(m1, m2))
         val router = UnifiedInferenceRouter(StubEngine(), CloudSseClient(OkHttpClient()), MemoryAnalyzer())
         val repo = MemoryRepository(store, router, backgroundScope = backgroundScope)
-        val vm = GraphViewModel(repo)
+        val vm = GraphViewModel(memoryId = "m1", memoryRepository = repo)
 
-        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
-            vm.availableMemories.collect {}
-        }
         backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
             vm.canvasState.collect {}
         }
@@ -126,22 +117,27 @@ class GraphViewModelTest {
             vm.entityCitation.collect {}
         }
 
-        assertEquals(listOf("m1", "m2"), vm.availableMemories.value.map { it.id })
-        assertEquals("m1", vm.canvasState.value.activeMemoryId)
+        val state = vm.canvasState.first { it.nodes.isNotEmpty() }
+        assertEquals("m1", state.memoryId)
+        assertEquals(setOf("老李", "张姐", "王总"), state.nodes.map { it.id }.toSet())
+        assertEquals(2, state.totalEdgeCount)
         assertNull(vm.entityCitation.value)
 
-        vm.onIntent(GraphIntent.BindMemory("m2"))
-        assertEquals("m2", vm.canvasState.value.activeMemoryId)
-        assertEquals(setOf("陈工", "刘敏"), vm.canvasState.value.nodes.map { it.id }.toSet())
-        assertEquals(1, vm.canvasState.value.visibleEdges.size)
-
         vm.onIntent(GraphIntent.SelectEntity("张姐"))
-        val citation = vm.entityCitation.value
+        val citation = withTimeout(3_000L) {
+            vm.entityCitation.first { it != null }
+        }
         assertEquals("张姐", citation?.entityName)
         assertEquals(listOf("m1"), citation?.relatedMemories?.map { it.id })
 
         vm.onIntent(GraphIntent.ClearSelectedEntity)
         assertNull(vm.entityCitation.value)
-        assertTrue(vm.canvasState.value.nodes.isNotEmpty())
+
+        vm.onIntent(GraphIntent.ReplayGrowth)
+        val finished = withTimeout(3_000L) {
+            vm.canvasState.first { !it.isReplaying && it.visibleEdges.size == 2 }
+        }
+        assertEquals(2, finished.visibleEdges.size)
+        assertTrue(finished.nodes.isNotEmpty())
     }
 }

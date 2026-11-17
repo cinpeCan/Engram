@@ -3,25 +3,19 @@ package io.github.cinpecan.engram.ui.navigation
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Hub
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
@@ -48,6 +42,7 @@ import io.github.cinpecan.engram.data.preferences.EnginePreferencesRepository
 import io.github.cinpecan.engram.domain.model.InferenceMode
 import io.github.cinpecan.engram.edgemnn.EdgeAiEngine
 import io.github.cinpecan.engram.edgemnn.EngineState
+import io.github.cinpecan.engram.ui.components.ExpressivePillSurface
 import java.util.Locale
 import org.koin.compose.koinInject
 import org.koin.compose.navigation3.koinEntryProvider
@@ -101,14 +96,6 @@ fun EngramWorkspace(
                     ),
                     scrollBehavior = topBarScrollBehavior,
                     actions = {
-                        IconButton(
-                            onClick = { navigator.openGraphForMemory(null) },
-                        ) {
-                            Icon(
-                                imageVector = Icons.Outlined.Hub,
-                                contentDescription = "打开关系脉络",
-                            )
-                        }
                         EngineStatusPill(
                             engineState = engineState,
                             inferenceMode = prefs.inferenceMode,
@@ -124,7 +111,8 @@ fun EngramWorkspace(
                 backStack = navigator.backStack,
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(innerPadding),
+                    .padding(innerPadding)
+                    .consumeWindowInsets(innerPadding),
                 onBack = navigator::goBack,
                 entryDecorators = listOf(
                     rememberSaveableStateHolderNavEntryDecorator<NavKey>(),
@@ -177,12 +165,14 @@ private fun EngineStatusPill(
         else -> "规则兜底"
     }
 
-    Surface(
-        modifier = modifier
-            .clip(RoundedCornerShape(50))
-            .clickable(onClick = onClick),
-        shape = RoundedCornerShape(50),
-        color = MaterialTheme.colorScheme.surfaceVariant,
+    ExpressivePillSurface(
+        onClick = onClick,
+        modifier = modifier,
+        restCorner = 20.dp,
+        pressedCorner = 10.dp,
+        containerColor = MaterialTheme.colorScheme.surfaceVariant,
+        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+        contentDescription = "引擎与模型状态：$text",
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),

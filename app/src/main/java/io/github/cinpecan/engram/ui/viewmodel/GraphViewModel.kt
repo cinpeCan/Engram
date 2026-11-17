@@ -18,12 +18,10 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 sealed interface GraphIntent {
-    data class BindMemory(val memoryId: String?) : GraphIntent
     data object ReplayGrowth : GraphIntent
     data class SelectEntity(val entityName: String) : GraphIntent
     data object ClearSelectedEntity : GraphIntent
@@ -37,16 +35,8 @@ data class GraphNodeUi(
 )
 
 @Immutable
-data class GraphMemoryOption(
-    val id: String,
-    val summarySnippet: String,
-    val edgeCount: Int,
-)
-
-@Immutable
 data class GraphCanvasState(
-    val activeMemoryId: String? = null,
-    val memorySummary: String = "2D 关系脉络",
+    val memoryId: String? = null,
     val nodes: List<GraphNodeUi> = emptyList(),
     val visibleEdges: List<RelationTriple> = emptyList(),
     val totalEdgeCount: Int = 0,
@@ -60,51 +50,18 @@ data class EntityCitationState(
 )
 
 class GraphViewModel(
+    private val memoryId: String,
     private val memoryRepository: MemoryRepository,
 ) : ViewModel() {
 
-    private val activeMemoryIdFlow = MutableStateFlow<String?>(null)
     private val replayEdgeLimitFlow = MutableStateFlow(Int.MAX_VALUE)
     private val isReplayingFlow = MutableStateFlow(false)
     private val selectedEntityFlow = MutableStateFlow<String?>(null)
 
     private var replayJob: Job? = null
 
-    private val memoriesSource = memoryRepository.observeMemories()
-        .shareIn(
-            scope = viewModelScope,
-            started = SharingStarted.WhileSubscribed(5_000L),
-            replay = 1,
-        )
-
-    val availableMemories: StateFlow<List<GraphMemoryOption>> = memoriesSource
-        .map { memories ->
-            memories
-                .filter { it.relations.isNotEmpty() }
-                .map { item ->
-                    val count = MemoryAnalyzer.sanitizeRelations(item.relations).size
-                    GraphMemoryOption(
-                        id = item.id,
-                        summarySnippet = item.summary.ifBlank { item.content }.take(16),
-                        edgeCount = count,
-                    )
-                }
-        }
+    private val targetMemoryFlow = memoryRepository.observeMemoryById(memoryId)
         .distinctUntilChanged()
-        .stateIn(
-            scope = viewModelScope,
-            started = SharingStarted.WhileSubscribed(5_000L),
-            initialValue = emptyList(),
-        )
-
-    private val targetMemoryFlow = combine(
-        memoriesSource,
-        activeMemoryIdFlow,
-    ) { memories, requestedId ->
-        memories.firstOrNull { it.id == requestedId }
-            ?: memories.firstOrNull { it.relations.isNotEmpty() }
-            ?: memories.firstOrNull()
-    }.distinctUntilChanged()
 
     val canvasState: StateFlow<GraphCanvasState> = combine(
         targetMemoryFlow,
@@ -124,8 +81,7 @@ class GraphViewModel(
         }
 
         GraphCanvasState(
-            activeMemoryId = targetMemory?.id,
-            memorySummary = targetMemory?.summary?.ifBlank { targetMemory.content } ?: "2D 关系脉络",
+            memoryId = targetMemory?.id ?: memoryId,
             nodes = nodes,
             visibleEdges = visibleEdges,
             totalEdgeCount = allSanitizedEdges.size,
@@ -134,7 +90,7 @@ class GraphViewModel(
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5_000L),
-        initialValue = GraphCanvasState(),
+        initialValue = GraphCanvasState(memoryId = memoryId),
     )
 
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -155,20 +111,9 @@ class GraphViewModel(
 
     fun onIntent(intent: GraphIntent) {
         when (intent) {
-            is GraphIntent.BindMemory -> bindMemory(intent.memoryId)
             GraphIntent.ReplayGrowth -> replayStreamingGrowth()
             is GraphIntent.SelectEntity -> selectedEntityFlow.value = intent.entityName
             GraphIntent.ClearSelectedEntity -> selectedEntityFlow.value = null
-        }
-    }
-
-    private fun bindMemory(memoryId: String?) {
-        if (activeMemoryIdFlow.value != memoryId) {
-            replayJob?.cancel()
-            isReplayingFlow.value = false
-            replayEdgeLimitFlow.value = Int.MAX_VALUE
-            selectedEntityFlow.value = null
-            activeMemoryIdFlow.value = memoryId
         }
     }
 
