@@ -51,3 +51,13 @@ __pycache__/
 .DS_Store
 Thumbs.db
 *.log
+
+# Compiled Prebuilt MNN Native Binaries & Headers (generated via scripts/build_mnn_android.sh)
+packages/edge-mnn/src/main/jniLibs/
+packages/edge-mnn/src/main/cpp/include/
+
+# Local Server Sync DB
+server/data/
+*.db
+*.db-wal
+*.db-shm

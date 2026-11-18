@@ -220,7 +220,11 @@ Java_io_github_cinpecan_engram_edgemnn_JniNativeBridge_nativeCreateSession(
         __android_log_print(ANDROID_LOG_ERROR, kLogTag, "MNN Llm::createLLM returned null for %s", dir_path.c_str());
         return 0;
     }
-    raw_llm->load();
+    if (!raw_llm->load()) {
+        __android_log_print(ANDROID_LOG_ERROR, kLogTag, "MNN Llm::load failed for %s", dir_path.c_str());
+        MNN::Transformer::Llm::destroy(raw_llm);
+        return 0;
+    }
 
     auto session = std::make_unique<EngramNativeSession>();
     session->model_dir = dir_path;
@@ -295,7 +299,7 @@ Java_io_github_cinpecan_engram_edgemnn_JniNativeBridge_nativeGenerateStream(
         session->llm->reset();
         CallbackStreamBuf stream_buf(env, callback, on_token_id, session, start_time, max_tokens);
         std::ostream os(&stream_buf);
-        session->llm->response(prompt_str, &os, nullptr, 0);
+        session->llm->response(prompt_str, &os, "", 0);
         while (!session->llm->stoped() &&
                !session->cancel_requested.load() &&
                stream_buf.generated_tokens() < max_tokens) {

@@ -62,6 +62,11 @@ class JniNativeBridge : NativeBridge {
 
     companion object {
         init {
+            runCatching { System.loadLibrary("c++_shared") }
+            runCatching { System.loadLibrary("MNN") }
+            runCatching { System.loadLibrary("MNN_CL") }
+            runCatching { System.loadLibrary("MNN_Express") }
+            runCatching { System.loadLibrary("llm") }
             System.loadLibrary("engram_mnn_jni")
         }
     }
