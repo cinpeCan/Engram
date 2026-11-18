@@ -1,5 +1,9 @@
 package io.github.cinpecan.engram.ui.capture
 
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
@@ -42,6 +46,7 @@ import androidx.compose.material.icons.outlined.Hub
 import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.CalendarMonth
+import androidx.compose.material.icons.rounded.EventAvailable
 import androidx.compose.material.icons.rounded.Hub
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
@@ -75,6 +80,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.cinpecan.engram.domain.agent.CalendarToolExecutor
 import io.github.cinpecan.engram.domain.model.AnalysisSource
@@ -107,17 +113,70 @@ fun CaptureRoute(
     val inputText by viewModel.inputText.collectAsStateWithLifecycle()
     val isSubmitting by viewModel.isSubmitting.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    var pendingInsert by remember { mutableStateOf<CaptureEffect.OpenCalendarInsert?>(null) }
+
+    val calendarPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        viewModel.onIntent(CaptureIntent.OnCalendarPermissionResult(granted))
+        val pending = pendingInsert
+        pendingInsert = null
+        if (pending != null) {
+            val launched = CalendarToolExecutor.launchCalendarInsert(
+                context = context,
+                memoryId = pending.memoryId,
+                proposal = pending.proposal,
+            )
+            viewModel.onIntent(
+                CaptureIntent.OnCalendarActionLaunched(
+                    title = pending.proposal.title,
+                    launched = launched,
+                    openedExisting = false,
+                    hasReadPermission = granted,
+                ),
+            )
+        }
+    }
 
     LaunchedEffect(viewModel, context) {
         viewModel.effects.collect { effect ->
             when (effect) {
-                is CaptureEffect.LaunchCalendarInsert -> {
-                    val launched = CalendarToolExecutor.launchCalendarInsert(context, effect.proposal)
-                    viewModel.onIntent(
-                        CaptureIntent.ConfirmCalendarLaunchResult(
+                is CaptureEffect.OpenCalendarInsert -> {
+                    val hasPermission = ContextCompat.checkSelfPermission(
+                        context,
+                        Manifest.permission.READ_CALENDAR,
+                    ) == PackageManager.PERMISSION_GRANTED
+                    if (hasPermission) {
+                        val launched = CalendarToolExecutor.launchCalendarInsert(
+                            context = context,
                             memoryId = effect.memoryId,
+                            proposal = effect.proposal,
+                        )
+                        viewModel.onIntent(
+                            CaptureIntent.OnCalendarActionLaunched(
+                                title = effect.proposal.title,
+                                launched = launched,
+                                openedExisting = false,
+                                hasReadPermission = true,
+                            ),
+                        )
+                    } else {
+                        pendingInsert = effect
+                        calendarPermissionLauncher.launch(Manifest.permission.READ_CALENDAR)
+                    }
+                }
+                is CaptureEffect.OpenCalendarEvent -> {
+                    val launched = CalendarToolExecutor.launchCalendarView(
+                        context = context,
+                        eventId = effect.eventId,
+                        proposal = effect.proposal,
+                    )
+                    viewModel.onIntent(
+                        CaptureIntent.OnCalendarActionLaunched(
                             title = effect.proposal.title,
                             launched = launched,
+                            openedExisting = true,
+                            hasReadPermission = true,
                         ),
                     )
                 }
@@ -200,9 +259,10 @@ fun CaptureScreen(
                         onOpenRawMemory = { onOpenRawMemory(memory.id) },
                         onAddCalendar = { proposal ->
                             onIntent(
-                                CaptureIntent.RequestAddCalendar(
+                                CaptureIntent.RequestCalendarAction(
                                     memoryId = memory.id,
                                     proposal = proposal,
+                                    existingEventId = memory.calendarEventId,
                                 ),
                             )
                         },
@@ -537,9 +597,17 @@ private fun MemoryTimelineCard(
                     } else if (!expanded) {
                         if (memory.calendarProposal != null) {
                             Icon(
-                                imageVector = Icons.Outlined.CalendarMonth,
-                                contentDescription = "包含日程",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f),
+                                imageVector = if (memory.calendarSaved) {
+                                    Icons.Rounded.EventAvailable
+                                } else {
+                                    Icons.Outlined.CalendarMonth
+                                },
+                                contentDescription = if (memory.calendarSaved) "已添至日历" else "包含日程",
+                                tint = if (memory.calendarSaved) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f)
+                                },
                                 modifier = Modifier.size(13.dp),
                             )
                         }

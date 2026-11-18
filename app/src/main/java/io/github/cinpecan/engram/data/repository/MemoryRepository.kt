@@ -1,6 +1,8 @@
 package io.github.cinpecan.engram.data.repository
 
 import androidx.compose.runtime.Immutable
+import io.github.cinpecan.engram.data.calendar.CalendarAnchorTarget
+import io.github.cinpecan.engram.data.calendar.SystemCalendarObserver
 import io.github.cinpecan.engram.data.local.LocalMemoryStore
 import io.github.cinpecan.engram.data.preferences.EnginePreferences
 import io.github.cinpecan.engram.data.preferences.EnginePreferencesRepository
@@ -26,7 +28,11 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -44,6 +50,7 @@ class MemoryRepository(
     private val inferenceRouter: UnifiedInferenceRouter,
     private val preferencesRepository: EnginePreferencesRepository? = null,
     private val syncClient: MemorySyncClient? = null,
+    private val calendarObserver: SystemCalendarObserver? = null,
     private val backgroundScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
 ) {
     private val seedMutex = Mutex()
@@ -51,12 +58,58 @@ class MemoryRepository(
     private val _streamingPreviews = MutableStateFlow<Map<String, StreamingPreviewState>>(emptyMap())
     val streamingPreviews: StateFlow<Map<String, StreamingPreviewState>> = _streamingPreviews.asStateFlow()
 
-    fun observeMemories(): Flow<List<MemoryItem>> = store.observeMemories()
+    private val syncedCalendarEventsFlow: Flow<Map<String, Long>> by lazy {
+        val observer = calendarObserver ?: return@lazy flowOf(emptyMap())
+        val targetsFlow = store.observeMemories()
+            .map { list ->
+                list.mapNotNull { item ->
+                    item.calendarProposal?.let { proposal ->
+                        CalendarAnchorTarget(memoryId = item.id, proposal = proposal)
+                    }
+                }
+            }
+            .distinctUntilChanged()
+        observer.observeSyncedEvents(targetsFlow)
+    }
 
-    fun observeMemoryById(memoryId: String): Flow<MemoryItem?> = store.observeMemoryById(memoryId)
+    fun observeMemories(): Flow<List<MemoryItem>> {
+        val baseFlow = store.observeMemories()
+        if (calendarObserver == null) return baseFlow
+        return combine(baseFlow, syncedCalendarEventsFlow) { list, syncedMap ->
+            list.map { item -> reconcileCalendarItem(item, syncedMap) }
+        }.distinctUntilChanged()
+    }
+
+    fun observeMemoryById(memoryId: String): Flow<MemoryItem?> {
+        val baseFlow = store.observeMemoryById(memoryId)
+        if (calendarObserver == null) return baseFlow
+        return combine(baseFlow, syncedCalendarEventsFlow) { item, syncedMap ->
+            item?.let { reconcileCalendarItem(it, syncedMap) }
+        }.distinctUntilChanged()
+    }
 
     fun observeMemoriesForEntity(entityName: String): Flow<List<MemoryItem>> =
         store.observeMemoriesForEntity(entityName)
+
+    fun notifyCalendarPermissionChanged() {
+        calendarObserver?.notifyPermissionChanged()
+    }
+
+    private suspend fun reconcileCalendarItem(
+        item: MemoryItem,
+        syncedMap: Map<String, Long>,
+    ): MemoryItem {
+        val observer = calendarObserver ?: return item
+        val eventId = syncedMap[item.id]
+        val isSynced = eventId != null
+        if (observer.hasReadCalendarPermission() && item.calendarSaved != isSynced) {
+            store.setCalendarSaved(item.id, isSynced)
+        }
+        return item.copy(
+            calendarSaved = isSynced,
+            calendarEventId = eventId,
+        )
+    }
 
     suspend fun initializeAndSeedIfNeeded() {
         seedMutex.withLock {
@@ -153,10 +206,6 @@ class MemoryRepository(
             }
         }
         return initial
-    }
-
-    suspend fun markCalendarSaved(memoryId: String) {
-        store.markCalendarSaved(memoryId)
     }
 
     suspend fun syncWithServer(

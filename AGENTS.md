@@ -32,8 +32,9 @@ engram/
    - Each memory records its true `AnalysisSource` (`MNN_EDGE`, `CLOUD_SSE`, `LOCAL_RULE_FALLBACK`, or `SEED`) alongside structured outputs: scannable bulleted summary, tags, calendar proposals, and 2D relation triples rendered via `Deponder 0.5.0`. Card telemetry badges are shown only for model-driven runs (`MNN_EDGE` / `CLOUD_SSE`) — never render `"预置示例"` or redundant fallback labels on cards.
    - **Summary-First & De-emphasized Raw Text**: Timeline cards have NO separate card title and NEVER inline raw user text (`原文`) directly. Multi-point summaries use concise `\n`-separated `• ` bullets (avoid dense `长难句`); inspecting raw input is intentionally tucked into a quiet expanded-card footer trigger that opens Navigation 3's `RawMemorySheet` bottom sheet.
    - Zero fake states: when native MNN libraries or weights are absent, or when the cloud gateway has no API key, the system never fakes `Ready` green indicators or simulated model streaming.
-2. **Human-in-the-Loop Tool Execution**:
-   - On-device action proposals (such as inserting a system calendar event via `CalendarContract`) MUST surface an explicit confirmation card in UI before invoking system intents. Never mutate user calendar or external state silently.
+2. **Human-in-the-Loop Tool Execution & Reactive System Calendar Sync**:
+   - On-device action proposals (such as inserting a system calendar event via `CalendarContract.Events`) MUST surface an explicit confirmation card in UI before invoking system intents (`ACTION_INSERT`). Never mutate user calendar or external state silently (`WRITE_CALENDAR` is intentionally omitted).
+   - Never optimistically mark `calendarSaved = true` on `startActivity` success. Subscribe reactively to `CalendarContract.CONTENT_URI` via `SystemCalendarObserver` (cold `callbackFlow` + `ContentObserver` + `WhileSubscribed(5_000L)`, zero imperative `ON_RESUME` polling) using `READ_CALENDAR` and `[engram:<memoryId>]` markers so canceling or deleting in System Calendar reverts `"已添至日历"` automatically and tapping a synced card opens `ACTION_VIEW` on the real `eventId`.
 3. **Contract-First Cross-Stack Alignment**:
    - All shared data payloads between `:app`, `:packages:edge-mnn`, and `server/` are specified in `contracts/*.schema.json` before modifying Kotlin DTOs or Python Pydantic models.
 4. **Native Memory & Thread Safety First**:

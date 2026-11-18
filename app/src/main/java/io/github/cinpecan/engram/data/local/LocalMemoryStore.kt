@@ -17,7 +17,7 @@ interface LocalMemoryStore {
         analysisSource: AnalysisSource,
         telemetryBadge: String,
     )
-    suspend fun markCalendarSaved(memoryId: String)
+    suspend fun setCalendarSaved(memoryId: String, saved: Boolean)
     suspend fun mergeRemoteMemories(remoteItems: List<MemoryItem>): Int
     suspend fun getAllMemories(): List<MemoryItem>
     suspend fun countMemories(): Int

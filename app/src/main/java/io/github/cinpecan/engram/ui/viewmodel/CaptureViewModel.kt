@@ -20,16 +20,24 @@ sealed interface CaptureIntent {
     data class UpdateInput(val text: String) : CaptureIntent
     data class FillSample(val sample: String) : CaptureIntent
     data object SubmitCapture : CaptureIntent
-    data class RequestAddCalendar(val memoryId: String, val proposal: CalendarProposal) : CaptureIntent
-    data class ConfirmCalendarLaunchResult(
+    data class RequestCalendarAction(
         val memoryId: String,
+        val proposal: CalendarProposal,
+        val existingEventId: Long?,
+    ) : CaptureIntent
+
+    data class OnCalendarPermissionResult(val granted: Boolean) : CaptureIntent
+    data class OnCalendarActionLaunched(
         val title: String,
         val launched: Boolean,
+        val openedExisting: Boolean,
+        val hasReadPermission: Boolean,
     ) : CaptureIntent
 }
 
 sealed interface CaptureEffect {
-    data class LaunchCalendarInsert(val memoryId: String, val proposal: CalendarProposal) : CaptureEffect
+    data class OpenCalendarInsert(val memoryId: String, val proposal: CalendarProposal) : CaptureEffect
+    data class OpenCalendarEvent(val eventId: Long, val proposal: CalendarProposal) : CaptureEffect
     data class ShowMessage(val message: String) : CaptureEffect
 }
 
@@ -61,15 +69,27 @@ class CaptureViewModel(
             is CaptureIntent.UpdateInput -> _inputText.value = intent.text
             is CaptureIntent.FillSample -> _inputText.value = intent.sample
             CaptureIntent.SubmitCapture -> submitCapture()
-            is CaptureIntent.RequestAddCalendar -> {
-                effectChannel.trySend(
-                    CaptureEffect.LaunchCalendarInsert(
-                        memoryId = intent.memoryId,
-                        proposal = intent.proposal,
-                    ),
-                )
+            is CaptureIntent.RequestCalendarAction -> {
+                if (intent.existingEventId != null) {
+                    effectChannel.trySend(
+                        CaptureEffect.OpenCalendarEvent(
+                            eventId = intent.existingEventId,
+                            proposal = intent.proposal,
+                        ),
+                    )
+                } else {
+                    effectChannel.trySend(
+                        CaptureEffect.OpenCalendarInsert(
+                            memoryId = intent.memoryId,
+                            proposal = intent.proposal,
+                        ),
+                    )
+                }
             }
-            is CaptureIntent.ConfirmCalendarLaunchResult -> handleCalendarLaunchResult(intent)
+            is CaptureIntent.OnCalendarPermissionResult -> {
+                memoryRepository.notifyCalendarPermissionChanged()
+            }
+            is CaptureIntent.OnCalendarActionLaunched -> handleCalendarActionLaunched(intent)
         }
     }
 
@@ -87,13 +107,14 @@ class CaptureViewModel(
         }
     }
 
-    private fun handleCalendarLaunchResult(result: CaptureIntent.ConfirmCalendarLaunchResult) {
+    private fun handleCalendarActionLaunched(result: CaptureIntent.OnCalendarActionLaunched) {
         viewModelScope.launch {
-            if (result.launched) {
-                memoryRepository.markCalendarSaved(result.memoryId)
-                effectChannel.send(CaptureEffect.ShowMessage("已拉起系统日历草稿：${result.title}"))
-            } else {
+            if (!result.launched) {
                 effectChannel.send(CaptureEffect.ShowMessage("未检测到可用的系统日历应用"))
+            } else if (!result.openedExisting && !result.hasReadPermission) {
+                effectChannel.send(
+                    CaptureEffect.ShowMessage("已打开系统日历草稿（授予日历权限可自动同步添加状态）"),
+                )
             }
         }
     }

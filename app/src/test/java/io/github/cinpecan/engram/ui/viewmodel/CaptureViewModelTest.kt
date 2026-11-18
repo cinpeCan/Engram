@@ -1,5 +1,7 @@
 package io.github.cinpecan.engram.ui.viewmodel
 
+import io.github.cinpecan.engram.data.calendar.CalendarAnchorTarget
+import io.github.cinpecan.engram.data.calendar.SystemCalendarObserver
 import io.github.cinpecan.engram.data.local.LocalMemoryStore
 import io.github.cinpecan.engram.data.remote.CloudSseClient
 import io.github.cinpecan.engram.data.repository.MemoryRepository
@@ -25,11 +27,13 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
 import okhttp3.OkHttpClient
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -42,7 +46,7 @@ class CaptureViewModelTest {
 
     private class FakeStore(initial: List<MemoryItem> = emptyList()) : LocalMemoryStore {
         private val items = MutableStateFlow(initial)
-        val markedCalendarSavedIds = mutableListOf<String>()
+        val savedStateUpdates = mutableListOf<Pair<String, Boolean>>()
 
         override fun observeMemories(): Flow<List<MemoryItem>> = items
         override fun observeMemoryById(memoryId: String): Flow<MemoryItem?> =
@@ -77,16 +81,33 @@ class CaptureViewModelTest {
             }
         }
 
-        override suspend fun markCalendarSaved(memoryId: String) {
-            markedCalendarSavedIds.add(memoryId)
+        override suspend fun setCalendarSaved(memoryId: String, saved: Boolean) {
+            savedStateUpdates.add(memoryId to saved)
             items.value = items.value.map { item ->
-                if (item.id == memoryId) item.copy(calendarSaved = true) else item
+                if (item.id == memoryId) item.copy(calendarSaved = saved) else item
             }
         }
 
         override suspend fun mergeRemoteMemories(remoteItems: List<MemoryItem>): Int = 0
         override suspend fun getAllMemories(): List<MemoryItem> = items.value
         override suspend fun countMemories(): Int = items.value.size
+    }
+
+    private class FakeCalendarObserver(
+        var granted: Boolean = true,
+    ) : SystemCalendarObserver {
+        val syncedEvents = MutableStateFlow<Map<String, Long>>(emptyMap())
+        var permissionNotifyCount = 0
+
+        override fun hasReadCalendarPermission(): Boolean = granted
+
+        override fun notifyPermissionChanged() {
+            permissionNotifyCount++
+        }
+
+        override fun observeSyncedEvents(
+            targetsFlow: Flow<List<CalendarAnchorTarget>>,
+        ): Flow<Map<String, Long>> = syncedEvents
     }
 
     private class StubEngine : EdgeAiEngine {
@@ -157,7 +178,7 @@ class CaptureViewModelTest {
     }
 
     @Test
-    fun calendarAddIntentEmitsLaunchEffectAndPersistsOnSuccess() = runTest {
+    fun calendarStateReactsToSystemProviderWithoutOptimisticWrites() = runTest {
         val proposal = CalendarProposal(
             title = "固件验收会议",
             startTimeIso = "2026-11-18T10:30:00",
@@ -176,36 +197,67 @@ class CaptureViewModelTest {
             relations = emptyList(),
         )
         val store = FakeStore(listOf(seed))
-        val repo = MemoryRepository(store, buildRouter(), backgroundScope = backgroundScope)
+        val observer = FakeCalendarObserver(granted = true)
+        val repo = MemoryRepository(
+            store = store,
+            inferenceRouter = buildRouter(),
+            calendarObserver = observer,
+            backgroundScope = backgroundScope,
+        )
         val vm = CaptureViewModel(repo)
 
         backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
             vm.memories.collect {}
         }
 
-        vm.onIntent(CaptureIntent.RequestAddCalendar("mem-cal-1", proposal))
-        val launchEffect = vm.effects.first()
-        assertEquals(CaptureEffect.LaunchCalendarInsert("mem-cal-1", proposal), launchEffect)
-
+        // Tapping add emits OpenCalendarInsert and does NOT optimistically flip calendarSaved
+        vm.onIntent(CaptureIntent.RequestCalendarAction("mem-cal-1", proposal, existingEventId = null))
+        assertEquals(CaptureEffect.OpenCalendarInsert("mem-cal-1", proposal), vm.effects.first())
         vm.onIntent(
-            CaptureIntent.ConfirmCalendarLaunchResult(
-                memoryId = "mem-cal-1",
+            CaptureIntent.OnCalendarActionLaunched(
+                title = proposal.title,
+                launched = true,
+                openedExisting = false,
+                hasReadPermission = true,
+            ),
+        )
+        assertFalse(vm.memories.value.single().calendarSaved)
+        assertNull(vm.memories.value.single().calendarEventId)
+        assertTrue(store.savedStateUpdates.isEmpty())
+
+        // Simulated System Calendar insert notification flips state reactively
+        observer.syncedEvents.value = mapOf("mem-cal-1" to 108L)
+        withTimeout(2_000L) {
+            vm.memories.first { it.single().calendarSaved && it.single().calendarEventId == 108L }
+        }
+        advanceUntilIdle()
+        assertEquals(true, store.savedStateUpdates.lastOrNull()?.second)
+
+        // Tapping synced card now opens existing system event
+        vm.onIntent(CaptureIntent.RequestCalendarAction("mem-cal-1", proposal, existingEventId = 108L))
+        assertEquals(CaptureEffect.OpenCalendarEvent(108L, proposal), vm.effects.first())
+
+        // Simulated deletion in System Calendar automatically reverts state
+        observer.syncedEvents.value = emptyMap()
+        withTimeout(2_000L) {
+            vm.memories.first { !it.single().calendarSaved && it.single().calendarEventId == null }
+        }
+        advanceUntilIdle()
+        assertEquals(false, store.savedStateUpdates.lastOrNull()?.second)
+
+        // Missing calendar app emits user-facing notice
+        vm.onIntent(
+            CaptureIntent.OnCalendarActionLaunched(
                 title = proposal.title,
                 launched = false,
+                openedExisting = false,
+                hasReadPermission = false,
             ),
         )
         assertEquals(CaptureEffect.ShowMessage("未检测到可用的系统日历应用"), vm.effects.first())
-        assertTrue(store.markedCalendarSavedIds.isEmpty())
 
-        vm.onIntent(
-            CaptureIntent.ConfirmCalendarLaunchResult(
-                memoryId = "mem-cal-1",
-                title = proposal.title,
-                launched = true,
-            ),
-        )
-        assertEquals(CaptureEffect.ShowMessage("已拉起系统日历草稿：固件验收会议"), vm.effects.first())
-        assertEquals(listOf("mem-cal-1"), store.markedCalendarSavedIds)
-        assertTrue(vm.memories.value.single().calendarSaved)
+        // Permission signal propagates
+        vm.onIntent(CaptureIntent.OnCalendarPermissionResult(granted = true))
+        assertEquals(1, observer.permissionNotifyCount)
     }
 }

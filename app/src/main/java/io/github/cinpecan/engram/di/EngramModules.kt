@@ -1,5 +1,7 @@
 package io.github.cinpecan.engram.di
 
+import io.github.cinpecan.engram.data.calendar.AndroidSystemCalendarObserver
+import io.github.cinpecan.engram.data.calendar.SystemCalendarObserver
 import io.github.cinpecan.engram.data.local.EngramDatabase
 import io.github.cinpecan.engram.data.local.LocalMemoryStore
 import io.github.cinpecan.engram.data.local.RoomMemoryStore
@@ -57,6 +59,7 @@ val dataModule = module {
     }
     single { EnginePreferencesRepository(androidContext()) }
     single { MemoryAnalyzer(json = get()) }
+    single<SystemCalendarObserver> { AndroidSystemCalendarObserver(androidContext()) }
     single { CloudSseClient(okHttpClient = get(), json = get()) }
     single { MemorySyncClient(okHttpClient = get(), json = get()) }
     single {
@@ -72,6 +75,7 @@ val dataModule = module {
             inferenceRouter = get(),
             preferencesRepository = get(),
             syncClient = get(),
+            calendarObserver = get(),
         )
     }
     single {

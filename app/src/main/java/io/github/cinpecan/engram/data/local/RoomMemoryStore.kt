@@ -74,9 +74,13 @@ class RoomMemoryStore(
         }
     }
 
-    override suspend fun markCalendarSaved(memoryId: String) {
+    override suspend fun setCalendarSaved(memoryId: String, saved: Boolean) {
         withContext(Dispatchers.IO) {
-            dao.markCalendarSaved(memoryId = memoryId, updatedAtMillis = System.currentTimeMillis())
+            dao.setCalendarSaved(
+                memoryId = memoryId,
+                saved = saved,
+                updatedAtMillis = System.currentTimeMillis(),
+            )
         }
     }
 

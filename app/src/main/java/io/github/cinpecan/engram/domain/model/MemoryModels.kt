@@ -60,6 +60,7 @@ data class MemoryItem(
     val analysisStatus: MemoryAnalysisStatus,
     val calendarProposal: CalendarProposal?,
     val calendarSaved: Boolean,
+    val calendarEventId: Long? = null,
     val relations: List<RelationTriple>,
     val analysisSource: AnalysisSource = AnalysisSource.LOCAL_RULE_FALLBACK,
     val telemetryBadge: String = "",

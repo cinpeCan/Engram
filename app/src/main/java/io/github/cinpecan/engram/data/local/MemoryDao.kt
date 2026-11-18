@@ -69,8 +69,8 @@ interface MemoryDao {
         updatedAtMillis: Long,
     )
 
-    @Query("UPDATE memories SET calendar_saved = 1, updated_at = :updatedAtMillis WHERE id = :memoryId")
-    suspend fun markCalendarSaved(memoryId: String, updatedAtMillis: Long)
+    @Query("UPDATE memories SET calendar_saved = :saved, updated_at = :updatedAtMillis WHERE id = :memoryId")
+    suspend fun setCalendarSaved(memoryId: String, saved: Boolean, updatedAtMillis: Long)
 
     @Query("DELETE FROM memory_relations WHERE memory_id = :memoryId")
     suspend fun deleteRelationsForMemory(memoryId: String)

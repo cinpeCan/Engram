@@ -52,7 +52,7 @@ class MemorySyncTest {
             analysisSource: AnalysisSource,
             telemetryBadge: String,
         ) = Unit
-        override suspend fun markCalendarSaved(memoryId: String) = Unit
+        override suspend fun setCalendarSaved(memoryId: String, saved: Boolean) = Unit
 
         override suspend fun mergeRemoteMemories(remoteItems: List<MemoryItem>): Int {
             val map = items.value.associateBy { it.id }.toMutableMap()

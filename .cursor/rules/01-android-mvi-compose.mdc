@@ -32,3 +32,4 @@ alwaysApply: false
    - Persist memories, relation triples, `analysisSource`, and `telemetryBadge` exclusively in `EngramDatabase` / `RoomMemoryStore` via cold `Flow`s in `MemoryDao` (`@Transaction`, `WAL`, `@Relation`) for on-demand table-tracked invalidation.
    - Never update `MemoryEntity` analysis fields with `@Insert(onConflict = REPLACE)`, which deletes rows and cascades to `memory_relations`; use targeted `@Query("UPDATE ...")` mutations.
    - Use `DataStore<Preferences>` solely for lightweight configuration switches (inference mode, selected model ID, server base URL, sync key).
+   - Drive calendar confirmation pills strictly from `SystemCalendarObserver` (cold `callbackFlow` + `ContentObserver` on `CalendarContract.CONTENT_URI`, zero `ON_RESUME` polling and zero optimistic `calendarSaved = true` writes).
