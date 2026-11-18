@@ -15,7 +15,10 @@ import okhttp3.RequestBody.Companion.toRequestBody
 
 class CloudSseClient(
     private val okHttpClient: OkHttpClient,
-    private val json: Json = Json { ignoreUnknownKeys = true },
+    private val json: Json = Json {
+        ignoreUnknownKeys = true
+        encodeDefaults = true
+    },
 ) {
     fun streamAnalyze(
         baseUrl: String,

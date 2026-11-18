@@ -19,15 +19,18 @@ import androidx.compose.material3.SheetValue
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.DialogWindowProvider
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.rememberLifecycleOwner
 import androidx.navigation3.runtime.NavEntry
@@ -38,6 +41,7 @@ import androidx.navigation3.scene.OverlayScene
 import androidx.navigation3.scene.Scene
 import androidx.navigation3.scene.SceneStrategy
 import androidx.navigation3.scene.SceneStrategyScope
+import io.github.cinpecan.engram.disableContrastEnforcement
 import io.github.cinpecan.engram.ui.components.ExpressivePillSurface
 import kotlinx.coroutines.launch
 
@@ -129,6 +133,13 @@ internal class BottomSheetScene<T : Any>(
                 }
             },
         ) {
+            val dialogView = LocalView.current
+            if (!dialogView.isInEditMode) {
+                SideEffect {
+                    val dialogWindow = (dialogView.parent as? DialogWindowProvider)?.window
+                    dialogWindow?.disableContrastEnforcement()
+                }
+            }
             CompositionLocalProvider(
                 LocalLifecycleOwner provides lifecycleOwner,
                 LocalModalBottomSheetState provides sheetState,

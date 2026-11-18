@@ -10,7 +10,6 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -88,6 +87,7 @@ import io.github.cinpecan.engram.ui.components.ExpressiveCardSurface
 import io.github.cinpecan.engram.ui.components.ExpressivePillSurface
 import io.github.cinpecan.engram.ui.navigation.EngramNavigator
 import io.github.cinpecan.engram.ui.navigation.LocalEngramNavigator
+import io.github.cinpecan.engram.ui.navigation.LocalWorkspaceContentPadding
 import io.github.cinpecan.engram.ui.viewmodel.CaptureEffect
 import io.github.cinpecan.engram.ui.viewmodel.CaptureIntent
 import io.github.cinpecan.engram.ui.viewmodel.CaptureViewModel
@@ -162,6 +162,7 @@ fun CaptureScreen(
 
     val isInputEmpty = inputText.isEmpty()
     val lockConsoleExpanded = inputText.isNotBlank() || isSubmitting || isInputFocused
+    val workspacePadding = LocalWorkspaceContentPadding.current
 
     CollapsibleBottomConsoleLayout(
         lockExpanded = lockConsoleExpanded,
@@ -183,7 +184,7 @@ fun CaptureScreen(
                     },
                 contentPadding = PaddingValues(
                     start = 16.dp,
-                    top = 12.dp,
+                    top = workspacePadding.calculateTopPadding() + 8.dp,
                     end = 16.dp,
                     bottom = bottomContentPadding,
                 ),
@@ -213,7 +214,6 @@ fun CaptureScreen(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.background)
                     .padding(horizontal = 12.dp, vertical = 6.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
@@ -358,7 +358,7 @@ private fun UnifiedCaptureComposer(
         Surface(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(containerCorner),
-            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
             border = BorderStroke(
                 width = if (isInputFocused) 1.5.dp else 1.dp,
                 color = borderColor,

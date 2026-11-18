@@ -11,7 +11,10 @@ import okhttp3.RequestBody.Companion.toRequestBody
 
 class MemorySyncClient(
     private val okHttpClient: OkHttpClient,
-    private val json: Json = Json { ignoreUnknownKeys = true },
+    private val json: Json = Json {
+        ignoreUnknownKeys = true
+        encodeDefaults = true
+    },
 ) {
     suspend fun syncMemories(
         baseUrl: String,

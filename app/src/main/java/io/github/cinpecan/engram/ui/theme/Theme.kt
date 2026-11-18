@@ -1,6 +1,9 @@
 package io.github.cinpecan.engram.ui.theme
 
+import android.content.Context
+import android.content.ContextWrapper
 import android.os.Build
+import androidx.activity.ComponentActivity
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material.ripple.RippleAlpha
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -13,8 +16,11 @@ import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
+import io.github.cinpecan.engram.applyTransparentSystemBars
 
 private val DarkColorScheme = darkColorScheme(
     primary = IndigoLight,
@@ -63,6 +69,14 @@ fun EngramTheme(
         else -> LightColorScheme
     }
 
+    val view = LocalView.current
+    if (!view.isInEditMode) {
+        val activity = view.context.findComponentActivity()
+        SideEffect {
+            activity?.applyTransparentSystemBars(darkTheme = darkTheme)
+        }
+    }
+
     MaterialTheme(
         colorScheme = colorScheme,
         typography = Typography,
@@ -71,4 +85,10 @@ fun EngramTheme(
             content()
         }
     }
+}
+
+private tailrec fun Context.findComponentActivity(): ComponentActivity? = when (this) {
+    is ComponentActivity -> this
+    is ContextWrapper -> baseContext.findComponentActivity()
+    else -> null
 }

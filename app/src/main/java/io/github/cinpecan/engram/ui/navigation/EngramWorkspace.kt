@@ -5,11 +5,22 @@ import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.calculateEndPadding
+import androidx.compose.foundation.layout.calculateStartPadding
+import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
@@ -23,6 +34,7 @@ import androidx.compose.material3.rememberTopAppBarState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -30,6 +42,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.navigation3.rememberViewModelStoreNavEntryDecorator
@@ -43,10 +56,11 @@ import io.github.cinpecan.engram.domain.model.InferenceMode
 import io.github.cinpecan.engram.edgemnn.EdgeAiEngine
 import io.github.cinpecan.engram.edgemnn.EngineState
 import io.github.cinpecan.engram.ui.components.ExpressivePillSurface
-import java.util.Locale
 import org.koin.compose.koinInject
 import org.koin.compose.navigation3.koinEntryProvider
 import org.koin.core.annotation.KoinExperimentalAPI
+
+val LocalWorkspaceContentPadding = compositionLocalOf { PaddingValues(0.dp) }
 
 @OptIn(
     ExperimentalMaterial3Api::class,
@@ -72,7 +86,7 @@ fun EngramWorkspace(
     }
 
     val topBarState = rememberTopAppBarState()
-    val topBarScrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior(state = topBarState)
+    val topBarScrollBehavior = TopAppBarDefaults.pinnedScrollBehavior(state = topBarState)
 
     val bottomSheetStrategy = remember { BottomSheetSceneStrategy<NavKey>() }
     val singlePaneStrategy = remember { SinglePaneSceneStrategy<NavKey>() }
@@ -86,20 +100,30 @@ fun EngramWorkspace(
     CompositionLocalProvider(LocalEngramNavigator provides navigator) {
         Scaffold(
             modifier = modifier.nestedScroll(topBarScrollBehavior.nestedScrollConnection),
-            snackbarHost = { SnackbarHost(snackbarHostState) },
+            containerColor = MaterialTheme.colorScheme.background,
+            contentWindowInsets = WindowInsets.systemBars
+                .union(WindowInsets.displayCutout)
+                .only(WindowInsetsSides.Horizontal),
+            snackbarHost = {
+                SnackbarHost(
+                    hostState = snackbarHostState,
+                    modifier = Modifier.windowInsetsPadding(
+                        WindowInsets.ime.union(WindowInsets.navigationBars),
+                    ),
+                )
+            },
             topBar = {
                 TopAppBar(
                     title = { Text("Engram · 印迹") },
                     colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = MaterialTheme.colorScheme.background,
-                        scrolledContainerColor = MaterialTheme.colorScheme.surface,
+                        containerColor = Color.Transparent,
+                        scrolledContainerColor = MaterialTheme.colorScheme.background.copy(alpha = 0.88f),
                     ),
                     scrollBehavior = topBarScrollBehavior,
                     actions = {
                         EngineStatusPill(
                             engineState = engineState,
                             inferenceMode = prefs.inferenceMode,
-                            isBackendAvailable = edgeEngine.isBackendAvailable,
                             onClick = { navigator.openOverlay(EngramNavKey.EngineSheet) },
                             modifier = Modifier.padding(end = 12.dp),
                         )
@@ -107,20 +131,25 @@ fun EngramWorkspace(
                 )
             },
         ) { innerPadding ->
-            NavDisplay(
-                backStack = navigator.backStack,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding)
-                    .consumeWindowInsets(innerPadding),
-                onBack = navigator::goBack,
-                entryDecorators = listOf(
-                    rememberSaveableStateHolderNavEntryDecorator<NavKey>(),
-                    rememberViewModelStoreNavEntryDecorator<NavKey>(),
-                ),
-                sceneStrategies = sceneStrategies,
-                entryProvider = koinEntryProvider<NavKey>(),
-            )
+            val layoutDirection = LocalLayoutDirection.current
+            CompositionLocalProvider(LocalWorkspaceContentPadding provides innerPadding) {
+                NavDisplay(
+                    backStack = navigator.backStack,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(
+                            start = innerPadding.calculateStartPadding(layoutDirection),
+                            end = innerPadding.calculateEndPadding(layoutDirection),
+                        ),
+                    onBack = navigator::goBack,
+                    entryDecorators = listOf(
+                        rememberSaveableStateHolderNavEntryDecorator<NavKey>(),
+                        rememberViewModelStoreNavEntryDecorator<NavKey>(),
+                    ),
+                    sceneStrategies = sceneStrategies,
+                    entryProvider = koinEntryProvider<NavKey>(),
+                )
+            }
         }
     }
 }
@@ -129,7 +158,6 @@ fun EngramWorkspace(
 private fun EngineStatusPill(
     engineState: EngineState,
     inferenceMode: InferenceMode,
-    isBackendAvailable: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {

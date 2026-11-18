@@ -2,11 +2,17 @@ package io.github.cinpecan.engram.ui.components
 
 import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.spring
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
@@ -19,6 +25,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
@@ -194,12 +202,12 @@ fun CollapsibleBottomConsoleLayout(
     }
 
     val consoleHeightDp = with(LocalDensity.current) { consoleState.consoleHeightPx.toDp() }
+    val bgColor = MaterialTheme.colorScheme.background
 
     Box(
         modifier = modifier
             .fillMaxSize()
             .clipToBounds()
-            .imePadding()
             .nestedScroll(consoleState.nestedScrollConnection),
     ) {
         listContent(consoleHeightDp + extraBottomListPadding)
@@ -211,8 +219,16 @@ fun CollapsibleBottomConsoleLayout(
                 .onSizeChanged { consoleState.updateHeight(it.height.toFloat()) }
                 .offset { IntOffset(x = 0, y = consoleState.offsetPx.roundToInt()) }
                 .graphicsLayer {
-                    alpha = (1f - consoleState.collapseFraction * 0.9f).coerceIn(0.1f, 1f)
-                },
+                    alpha = (1f - consoleState.collapseFraction).coerceIn(0f, 1f)
+                }
+                .background(
+                    Brush.verticalGradient(
+                        0.0f to Color.Transparent,
+                        0.35f to bgColor.copy(alpha = 0.84f),
+                        1.0f to bgColor.copy(alpha = 0.94f),
+                    ),
+                )
+                .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)),
         ) {
             consoleContent()
         }

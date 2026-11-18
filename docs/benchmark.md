@@ -6,7 +6,7 @@
 | :--- | :--- | :--- |
 | `:packages:edge-mnn` C++/JNI & JVM Tests | `TokenStreamCoalescer` 32ms windowing, `MnnEngineManager` strict validation (rejects missing backend/blank dir), JNI thread serialization & `onTrimMemory` state machine, `arm64-v8a` 16KB-aligned CMake compilation | `./gradlew :packages:edge-mnn:testDebugUnitTest :packages:edge-mnn:assembleDebug` |
 | `:app` Unit Tests & Debug APK | `MemoryAnalyzer` JSON extraction & Deponder invariants, `UnifiedInferenceRouter` honest MNN/SSE/fallback routing, `EngramNavigator`, `CaptureViewModel`, `GraphViewModel`, `EngineViewModel`, Compose + Nav3 APK packaging | `./gradlew testDebugUnitTest assembleDebug` |
-| `server/` FastAPI Contract Tests | `/health`, `/api/v1/models/manifest`, `/api/v1/analyze/stream` HTTP 503 unconfigured & OpenAI SSE conformance against `contracts/*.schema.json` | `server/.venv/bin/pytest server/tests` |
+| `server/` FastAPI Contract Tests | `/health`, `/api/v1/memories/sync`, `/api/v1/analyze/stream` HTTP 503 unconfigured & OpenAI SSE conformance against `contracts/*.schema.json` | `server/.venv/bin/pytest server/tests` |
 
 ---
 
@@ -30,7 +30,7 @@ After running `./scripts/build_mnn_android.sh` and deploying `qwen2.5-0.5b-instr
 | *Target Device 1* | `Qwen2.5-0.5B-Instruct-MNN (INT4)` | *TBD* | *TBD* | *TBD* | *TBD* | *TBD* |
 
 ### Reproduction Steps
-1. Toggle **Airplane Mode** on the test device and select **纯离线 MNN** in `EngineBottomSheet`.
-2. Verify `MNN 原生库：已链接 (arm64-v8a)` and tap **加载模型** -> confirm `EngineStatusPill` turns green and record RSS increase (`modelFootprintBytes`).
+1. Toggle **Airplane Mode** on the test device and select **端侧离线** in `EngineBottomSheet`.
+2. Download `Qwen2.5-0.5B Instruct · INT4` and tap **加载模型** -> confirm `EngineStatusPill` turns green and record RSS increase (`modelFootprintBytes`).
 3. Submit 3 notes in `CaptureScreen` and observe live 32ms-coalesced streaming inside each `PENDING` card; record `TTFT` and `tok/s` from each settled card's telemetry badge.
-4. Tap **「立即释放引擎内存 (Unload Session)」** (or background the app beyond `15s` / trigger `adb shell am send-trim-memory io.github.cinpecan.engram RUNNING_CRITICAL`) and record reclaimed RSS.
+4. Tap **「释放内存」** (or background the app beyond `15s` / trigger `adb shell am send-trim-memory io.github.cinpecan.engram RUNNING_CRITICAL`) and record reclaimed RSS.

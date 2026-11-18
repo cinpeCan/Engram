@@ -1,4 +1,4 @@
-"""Engram 同仓轻量后端: 跨设备记忆增量同步 + OpenAI 兼容 SSE 云端协同提炼."""
+"""Engram 轻量后端服务: 跨设备记忆增量同步 + OpenAI 兼容 SSE 云端协同提炼."""
 
 from __future__ import annotations
 
