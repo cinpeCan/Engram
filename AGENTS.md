@@ -12,13 +12,13 @@ engram/
 ├── CLAUDE.md                       # Pointer & quick command reference
 ├── .cursor/rules/                  # Path-scoped modular engineering constraints (.mdc)
 ├── contracts/                      # Shared JSON Schemas across Android, Edge Runtime, and Server
-│   ├── model-manifest.schema.json
 │   ├── memory-analysis.schema.json
-│   └── analysis-sse.schema.json
+│   ├── analysis-sse.schema.json
+│   └── memory-sync.schema.json
 ├── app/                            # :app Android client (io.github.cinpecan.engram)
 ├── packages/
 │   └── edge-mnn/                   # :packages:edge-mnn standalone MNN C++/JNI runtime library
-├── server/                         # Python FastAPI gateway (model manifest & cloud SSE analysis)
+├── server/                         # Python FastAPI service (multi-device SQLite sync & cloud SSE)
 ├── scripts/                        # MNN native build, model fetch, and local dev server scripts
 └── docs/                           # Architecture specification & real-device MNN benchmarks
 ```
@@ -48,7 +48,7 @@ engram/
 - **UI/UX Invariants (Do Not Regress)**:
   - **Symmetrical Unified Composer & Inset/IME Discipline**: `NavDisplay` MUST apply `consumeWindowInsets(innerPadding)` after `padding(innerPadding)` and `CaptureScreen` composer MUST NOT add duplicate `navigationBarsPadding()`. The composer is a single symmetrical full-width rounded container enclosing an optically centered `ArrowUpward` submit button (`Alignment.BottomEnd`), computing multiline state via `rememberTextMeasurer()` to apply internal bottom padding (`44.dp`) without layout oscillation or text occlusion. Tapping blank list areas, tapping cards while keyboard is open, or scrolling MUST dismiss the soft keyboard.
   - **M3 Expressive Tactile Feedback**: Interactive cards, pills, and icon actions use `ExpressiveCardSurface` / `ExpressivePillSurface` (spring corner shape morphing, gentle scale, and tonal shift with `indication = null`) rather than harsh legacy radial ripples.
-  - **Single-Memory Frameless `GraphSheet`**: `GraphSheet(memoryId)` MUST bind strictly to a single memory — no global unbound top-bar graph entry, no internal memory switcher chips, no repeated summary header, no shrink button, and no inner bordered rectangle. The sheet-level close (`✕`) control belongs exclusively in `BottomSheetScene`'s top `dragHandle` chrome bar; only a quiet floating icon-only `Replay` button may sit inside the frameless canvas.
+  - **Single-Memory Frameless `GraphSheet` & Minimalist `EngineSheet`**: `GraphSheet(memoryId)` MUST bind strictly to a single memory — no global unbound top-bar graph entry, no internal memory switcher chips, no repeated summary header, no shrink button, and no inner bordered rectangle. The sheet-level close (`✕`) control belongs exclusively in `BottomSheetScene`'s top `dragHandle` chrome bar; only a quiet floating icon-only `Replay` button may sit inside the frameless canvas. `EngineSheet` MUST likewise remain frameless (no nested `Card` borders), download `qwen2.5-0.5b-instruct-mnn` directly from ModelScope/HuggingFace mirrors without routing manifests through the app server, use the app server for multi-device SQLite sync (`POST /api/v1/memories/sync`) and Cloud SSE, and avoid exposing developer meta-jargon (`"诚实兜底"`, `"需内置 .so"`, `"同仓 FastAPI"`) in user-facing copy.
 - **No Blocking I/O on Main**: All Room queries, file streaming (`RandomAccessFile`), SHA-256 verification, and network calls execute on `Dispatchers.IO` or `Dispatchers.Default`.
 - **Deponder Graph Invariants**: Nodes passed to `DeponderDefaultRubber` / `Modifier.deponderPlanet` under a `deponderRoot` MUST have unique IDs, zero self-loops (`source != target`), and merged bidirectional edges (undirected key `(min(a,b), max(a,b))`). Background drags inside the canvas are isolated from `ModalBottomSheet` vertical dismissal gestures, and `onSizeChanged` shifts planet `y` by `Δheight / 2` across half/full transitions so the graph stays centered vertically.
 

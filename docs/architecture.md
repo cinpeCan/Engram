@@ -10,13 +10,13 @@ flowchart TB
         Capture["CaptureScreen\n(Bulleted Timeline, Symmetrical Composer, Calendar Confirm)"]
         RawSheet["RawMemorySheet (ModalBottomSheet)\n(De-emphasized Full Raw Note & Copy)"]
         Graph["GraphScreen (Single-Memory Expandable Sheet)\n(Frameless Bounds, Δh/2 Recentering, Deponder 0.5.0)"]
-        EngineSheet["EngineBottomSheet\n(Edge/Cloud Mode Switch, Resumable Range Download, RSS & Unload)"]
+        EngineSheet["EngineBottomSheet\n(Frameless Mode Switch, Direct ModelScope Fetch, Multi-Device Sync)"]
 
         Analyzer["MemoryAnalyzer\n(JSON Schema + Bullet Normalizer + Fallback)"]
         Router["UnifiedInferenceRouter"]
 
-        SQLite["EngramDatabase / RoomMemoryStore\n(Room WAL + @Relation Cold Flow)"]
-        Prefs["EnginePreferencesRepository\n(DataStore Config Only)"]
+        SQLite["EngramDatabase / RoomMemoryStore\n(Room v3 WAL + @Relation Cold Flow)"]
+        Prefs["EnginePreferencesRepository\n(DataStore Config & SyncKey)"]
     end
 
     subgraph EdgeRuntime[":packages:edge-mnn"]
@@ -25,23 +25,29 @@ flowchart TB
         JNI["engram_mnn_jni.cpp\n(Step-Cancelable MNN::Llm + 16KB Page Alignment)"]
     end
 
-    subgraph Gateway["server/ (FastAPI)"]
-        Manifest["GET /api/v1/models/manifest"]
+    subgraph OpenSourceCDN["ModelScope / HuggingFace"]
+        Weights["MNN/Qwen2.5-0.5B-Instruct-MNN\n(config, tokenizer.mtok, embeddings_bf16.bin, llm.mnn*)"]
+    end
+
+    subgraph Gateway["server/ (FastAPI + SQLite WAL)"]
+        Sync["POST /api/v1/memories/sync"]
         SSE["POST /api/v1/analyze/stream"]
     end
 
     Capture -->|captureMemory| Router
     Router -->|StreamingPreview| Capture
     Router -->|CLOUD_COLLAB| SSE
-    Router -->|OFFLINE_EDGE / fallback| Manager
+    Router -->|OFFLINE_EDGE| Manager
     Router -->|Completed + AnalysisSource| SQLite
     SQLite --> Capture
     SQLite --> RawSheet
     SQLite --> Graph
-    EngineSheet -->|OkHttp Range + RandomAccessFile + .sha256| Manifest
+    SQLite <-->|LWW Sync by syncKey| Sync
+    EngineSheet -->|OkHttp Range + .sha256| Weights
+    EngineSheet -->|Trigger Sync| Sync
     Manager --> JNI
     JNI --> Coalescer --> Router
-    Contracts -.-> Analyzer & Manifest & SSE
+    Contracts -.-> Analyzer & Sync & SSE
     Prefs --> Router & EngineSheet
 ```
 

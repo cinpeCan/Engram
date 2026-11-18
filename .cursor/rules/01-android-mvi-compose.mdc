@@ -23,6 +23,7 @@ alwaysApply: false
    - Use M3 Expressive spring shape-morphing `ExpressiveCardSurface` / `ExpressivePillSurface` (`indication = null`) and low-glare `LocalRippleConfiguration` over legacy heavy radial ink ripples.
 4. **GraphSheet Minimalism & Deponder 0.5.0 Integration (`com.cinpe.deponder.*`)**:
    - `GraphSheet` represents a single `memoryId`: no internal memory switcher tabs/chips, no duplicated summary header, no shrink button, no inner bordered rectangle (`Surface`/`BorderStroke`), and sheet-level `✕` close lives in `BottomSheetScene`'s `dragHandle` chrome bar.
+   - `EngineSheet` MUST remain frameless (no nested `Card` borders) and fetch model weights directly from ModelScope/HuggingFace without server manifest proxying; keep user-facing copy free of engineering meta-jargon (`"诚实兜底"`, `"需内置 .so"`, `"同仓 FastAPI"`).
    - Wrap each `DeponderDefaultRubber` in `key(edgeKey)` and each node in `key(node.id)` inside `Box(Modifier.deponderRoot(state))`, translating planet `y` by `Δheight / 2` in `onSizeChanged` when viewport height transitions between half-sheet (`50%`) and expanded (`92%`).
    - Enforce deduplicated node IDs, zero self-loops, and single merged edge per unordered pair `(a, b)`.
    - Isolate empty-canvas drags via a background sibling pointer consumer and `NestedScrollConnection` so `ModalBottomSheet` does not dismiss accidentally during graph interaction.
@@ -30,4 +31,4 @@ alwaysApply: false
 5. **Storage Boundaries (`Jetpack Room` & `DataStore`)**:
    - Persist memories, relation triples, `analysisSource`, and `telemetryBadge` exclusively in `EngramDatabase` / `RoomMemoryStore` via cold `Flow`s in `MemoryDao` (`@Transaction`, `WAL`, `@Relation`) for on-demand table-tracked invalidation.
    - Never update `MemoryEntity` analysis fields with `@Insert(onConflict = REPLACE)`, which deletes rows and cascades to `memory_relations`; use targeted `@Query("UPDATE ...")` mutations.
-   - Use `DataStore<Preferences>` solely for lightweight configuration switches (inference mode, selected model ID, server base URL).
+   - Use `DataStore<Preferences>` solely for lightweight configuration switches (inference mode, selected model ID, server base URL, sync key).

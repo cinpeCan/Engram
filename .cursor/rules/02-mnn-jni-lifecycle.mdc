@@ -13,7 +13,7 @@ alwaysApply: false
 2. **Step-Cancelable Native Decoding & RAII**:
    - Manage native session pointers (`jlong` handles) with explicit validity checks and `std::atomic<bool>` cancellation flags checked on every `Llm::generate(1)` decode step.
 3. **16KB Page Size Alignment**:
-   - Retain `-Wl,-z,max-page-size=16384` in `CMakeLists.txt` and `-DCMAKE_SHARED_LINKER_FLAGS=-Wl,-z,max-page-size=16384` / `-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON` in `scripts/build_mnn_android.sh`, linking `libMNN_Express.so` when present.
+   - Retain `-Wl,-z,max-page-size=16384` in `CMakeLists.txt` and `-DCMAKE_SHARED_LINKER_FLAGS=-Wl,-z,max-page-size=16384` / `-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON` in `scripts/build_mnn_android.sh`, bundling and linking `libMNN.so`, `libMNN_CL.so`, `libMNN_Express.so`, and `libllm.so` with debug symbols stripped (`llvm-strip --strip-unneeded`).
 4. **Stream Coalescing & RSS Watermarks**:
    - Route high-frequency token callbacks through `TokenStreamCoalescer` (32ms window) before UI emission.
    - Measure process resident memory via `/proc/self/statm` (`AndroidMemoryProvider`) and handle `ComponentCallbacks2.onTrimMemory` thresholds deterministically: `TRIM_MEMORY_UI_HIDDEN` schedules idle release; `TRIM_MEMORY_RUNNING_CRITICAL` / `TRIM_MEMORY_BACKGROUND` cancels generation and releases native weights immediately.
