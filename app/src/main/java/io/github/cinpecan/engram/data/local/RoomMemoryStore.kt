@@ -36,20 +36,7 @@ class RoomMemoryStore(
     override suspend fun insertRawMemory(item: MemoryItem) {
         withContext(Dispatchers.IO) {
             db.withTransaction {
-                dao.upsertMemory(
-                    MemoryEntity(
-                        id = item.id,
-                        content = item.content,
-                        summary = item.summary,
-                        tagsJson = json.encodeToString(item.tags),
-                        createdAtMillis = item.createdAtMillis,
-                        analysisStatus = item.analysisStatus.name,
-                        calendarJson = item.calendarProposal?.let { json.encodeToString(it) },
-                        calendarSaved = item.calendarSaved,
-                        analysisSource = item.analysisSource.name,
-                        telemetryBadge = item.telemetryBadge,
-                    ),
-                )
+                dao.upsertMemory(item.toEntity())
                 replaceRelations(item.id, item.relations)
             }
         }
@@ -73,6 +60,7 @@ class RoomMemoryStore(
                         calendarJson = payload.calendarProposal?.let { json.encodeToString(it) },
                         analysisSource = analysisSource.name,
                         telemetryBadge = telemetryBadge,
+                        updatedAtMillis = System.currentTimeMillis(),
                     )
                     val normalizedRelations = payload.relations.mapIndexed { idx, rel ->
                         rel.copy(
@@ -88,9 +76,39 @@ class RoomMemoryStore(
 
     override suspend fun markCalendarSaved(memoryId: String) {
         withContext(Dispatchers.IO) {
-            dao.markCalendarSaved(memoryId)
+            dao.markCalendarSaved(memoryId = memoryId, updatedAtMillis = System.currentTimeMillis())
         }
     }
+
+    override suspend fun mergeRemoteMemories(remoteItems: List<MemoryItem>): Int =
+        withContext(Dispatchers.IO) {
+            var applied = 0
+            db.withTransaction {
+                for (remote in remoteItems) {
+                    val existing = dao.getMemoryEntity(remote.id)
+                    val shouldApply = when {
+                        existing == null -> true
+                        remote.updatedAtMillis > existing.updatedAtMillis -> true
+                        remote.updatedAtMillis == existing.updatedAtMillis &&
+                            remote.analysisStatus == MemoryAnalysisStatus.READY &&
+                            existing.analysisStatus != MemoryAnalysisStatus.READY.name -> true
+                        else -> false
+                    }
+                    if (shouldApply) {
+                        dao.upsertMemory(remote.toEntity())
+                        val normalizedRelations = remote.relations.mapIndexed { idx, rel ->
+                            rel.copy(
+                                id = rel.id.ifBlank { "${remote.id}_r$idx" },
+                                memoryId = remote.id,
+                            )
+                        }
+                        replaceRelations(remote.id, normalizedRelations)
+                        applied++
+                    }
+                }
+            }
+            applied
+        }
 
     override suspend fun getAllMemories(): List<MemoryItem> = withContext(Dispatchers.IO) {
         dao.getAllMemories().map { it.toDomain() }
@@ -121,6 +139,21 @@ class RoomMemoryStore(
         }
     }
 
+    private fun MemoryItem.toEntity(): MemoryEntity =
+        MemoryEntity(
+            id = id,
+            content = content,
+            summary = summary,
+            tagsJson = json.encodeToString(tags),
+            createdAtMillis = createdAtMillis,
+            analysisStatus = analysisStatus.name,
+            calendarJson = calendarProposal?.let { json.encodeToString(it) },
+            calendarSaved = calendarSaved,
+            analysisSource = analysisSource.name,
+            telemetryBadge = telemetryBadge,
+            updatedAtMillis = updatedAtMillis,
+        )
+
     private fun MemoryWithRelations.toDomain(): MemoryItem {
         val tags = runCatching { json.decodeFromString<List<String>>(memory.tagsJson) }
             .getOrDefault(emptyList())
@@ -130,6 +163,11 @@ class RoomMemoryStore(
             .getOrDefault(AnalysisSource.LOCAL_RULE_FALLBACK)
         val calendarProposal = memory.calendarJson?.let { raw ->
             runCatching { json.decodeFromString<CalendarProposal>(raw) }.getOrNull()
+        }
+        val resolvedUpdatedAt = if (memory.updatedAtMillis > 0L) {
+            memory.updatedAtMillis
+        } else {
+            memory.createdAtMillis
         }
         return MemoryItem(
             id = memory.id,
@@ -152,6 +190,7 @@ class RoomMemoryStore(
             },
             analysisSource = source,
             telemetryBadge = memory.telemetryBadge,
+            updatedAtMillis = resolvedUpdatedAt,
         )
     }
 }

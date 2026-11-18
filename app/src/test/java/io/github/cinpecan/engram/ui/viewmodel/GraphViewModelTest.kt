@@ -60,6 +60,7 @@ class GraphViewModelTest {
             telemetryBadge: String,
         ) = Unit
         override suspend fun markCalendarSaved(memoryId: String) = Unit
+        override suspend fun mergeRemoteMemories(remoteItems: List<MemoryItem>): Int = 0
         override suspend fun getAllMemories(): List<MemoryItem> = items.value
         override suspend fun countMemories(): Int = items.value.size
     }

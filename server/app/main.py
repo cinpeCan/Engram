@@ -1,4 +1,4 @@
-"""Engram同仓轻量服务端: 端侧 MNN 模型清单分发 + OpenAI 兼容 SSE 结构化记忆提炼."""
+"""Engram 同仓轻量后端: 跨设备记忆增量同步 + OpenAI 兼容 SSE 云端协同提炼."""
 
 from __future__ import annotations
 
@@ -14,78 +14,36 @@ from fastapi.responses import StreamingResponse
 from .schemas import (
     AnalysisStreamChunk,
     AnalysisStreamRequest,
-    ModelDescriptor,
-    ModelFile,
-    ModelManifestResponse,
+    MemorySyncRequest,
+    MemorySyncResponse,
 )
+from .storage import sync_workspace
 
 app = FastAPI(
-    title="Engram Gateway",
-    version="0.2.0",
-    description="On-device MNN model catalog and cloud SSE structured analysis gateway.",
+    title="Engram Sync & Cloud Inference Service",
+    version="0.3.0",
+    description="Multi-device memory synchronization and OpenAI-compatible cloud SSE distillation.",
 )
-
-
-def build_default_manifest() -> ModelManifestResponse:
-    return ModelManifestResponse(
-        schemaVersion="1.0.0",
-        models=[
-            ModelDescriptor(
-                id="qwen2.5-0.5b-instruct-mnn",
-                name="Qwen2.5-0.5B Instruct (MNN INT4)",
-                role="generation",
-                quantization="INT4",
-                sizeBytes=398_458_880,
-                minRamMb=2048,
-                downloadUrl="https://huggingface.co/taobao-mnn/Qwen2.5-0.5B-Instruct-MNN/resolve/main/llm.mnn.weight",
-                mirrorUrl="https://modelscope.cn/models/MNN/Qwen2.5-0.5B-Instruct-MNN/resolve/master/llm.mnn.weight",
-                sha256=None,
-                description="端侧离线推理核心模型，用于实时流式提炼结构化摘要、日程提议与实体关系三元组。",
-                files=[
-                    ModelFile(
-                        name="config.json",
-                        url="https://modelscope.cn/models/MNN/Qwen2.5-0.5B-Instruct-MNN/resolve/master/config.json",
-                        sizeBytes=624,
-                        sha256=None,
-                    ),
-                    ModelFile(
-                        name="llm_config.json",
-                        url="https://modelscope.cn/models/MNN/Qwen2.5-0.5B-Instruct-MNN/resolve/master/llm_config.json",
-                        sizeBytes=780,
-                        sha256=None,
-                    ),
-                    ModelFile(
-                        name="tokenizer.txt",
-                        url="https://modelscope.cn/models/MNN/Qwen2.5-0.5B-Instruct-MNN/resolve/master/tokenizer.txt",
-                        sizeBytes=2_450_000,
-                        sha256=None,
-                    ),
-                    ModelFile(
-                        name="llm.mnn",
-                        url="https://modelscope.cn/models/MNN/Qwen2.5-0.5B-Instruct-MNN/resolve/master/llm.mnn",
-                        sizeBytes=4_200_000,
-                        sha256=None,
-                    ),
-                    ModelFile(
-                        name="llm.mnn.weight",
-                        url="https://modelscope.cn/models/MNN/Qwen2.5-0.5B-Instruct-MNN/resolve/master/llm.mnn.weight",
-                        sizeBytes=391_807_476,
-                        sha256=None,
-                    ),
-                ],
-            ),
-        ],
-    )
 
 
 @app.get("/health")
 async def health() -> dict[str, str]:
-    return {"status": "ok", "service": "engram-gateway"}
+    return {"status": "ok", "service": "engram-server"}
 
 
-@app.get("/api/v1/models/manifest", response_model=ModelManifestResponse)
-async def get_model_manifest() -> ModelManifestResponse:
-    return build_default_manifest()
+@app.post("/api/v1/memories/sync", response_model=MemorySyncResponse)
+async def sync_memories(request: MemorySyncRequest) -> MemorySyncResponse:
+    cleaned_key = request.syncKey.strip()
+    if not cleaned_key:
+        raise HTTPException(status_code=400, detail="syncKey must not be empty")
+    upserted_count, merged_memories = sync_workspace(cleaned_key, request.memories)
+    return MemorySyncResponse(
+        syncKey=cleaned_key,
+        upsertedCount=upserted_count,
+        totalCount=len(merged_memories),
+        serverTimeMillis=int(time.time() * 1000),
+        memories=merged_memories,
+    )
 
 
 def _build_analysis_messages(request: AnalysisStreamRequest) -> list[dict[str, str]]:
@@ -173,8 +131,11 @@ async def analyze_stream(request: AnalysisStreamRequest) -> StreamingResponse:
     if not api_key:
         raise HTTPException(status_code=503, detail="ENGRAM_CLOUD_API_KEY is not configured")
 
-    base_url = os.getenv("ENGRAM_CLOUD_BASE_URL", "https://api.openai.com/v1").strip()
-    cloud_model = os.getenv("ENGRAM_CLOUD_MODEL", "gpt-4o-mini").strip() or request.model
+    base_url = os.getenv(
+        "ENGRAM_CLOUD_BASE_URL",
+        "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    ).strip()
+    cloud_model = os.getenv("ENGRAM_CLOUD_MODEL", "qwen-turbo").strip() or request.model
 
     start_time = time.perf_counter()
     generator = _stream_upstream_analysis(

@@ -1,16 +1,19 @@
 package io.github.cinpecan.engram.ui.engine
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AirplanemodeActive
@@ -20,17 +23,12 @@ import androidx.compose.material.icons.rounded.CloudQueue
 import androidx.compose.material.icons.rounded.Memory
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
-import androidx.compose.material.icons.rounded.Refresh
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material.icons.rounded.Sync
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
@@ -44,13 +42,16 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import io.github.cinpecan.engram.data.remote.ModelDescriptorDto
 import io.github.cinpecan.engram.data.remote.ModelDownloadState
 import io.github.cinpecan.engram.domain.model.InferenceMode
 import io.github.cinpecan.engram.edgemnn.EngineState
+import io.github.cinpecan.engram.ui.components.ExpressivePillSurface
 import io.github.cinpecan.engram.ui.viewmodel.EngineEffect
 import io.github.cinpecan.engram.ui.viewmodel.EngineIntent
 import io.github.cinpecan.engram.ui.viewmodel.EngineRuntimeStatus
@@ -67,7 +68,8 @@ fun EngineBottomSheetRoute(
     val inferenceMode by viewModel.inferenceMode.collectAsStateWithLifecycle()
     val runtimeStatus by viewModel.runtimeStatus.collectAsStateWithLifecycle()
     val serverUrlInput by viewModel.serverUrlInput.collectAsStateWithLifecycle()
-    val isRefreshing by viewModel.isRefreshing.collectAsStateWithLifecycle()
+    val syncKeyInput by viewModel.syncKeyInput.collectAsStateWithLifecycle()
+    val isSyncing by viewModel.isSyncing.collectAsStateWithLifecycle()
     val catalogItems by viewModel.catalogItems.collectAsStateWithLifecycle()
     var latestNotice by remember { mutableStateOf<String?>(null) }
 
@@ -83,7 +85,8 @@ fun EngineBottomSheetRoute(
         inferenceMode = inferenceMode,
         runtimeStatus = runtimeStatus,
         serverUrlInput = serverUrlInput,
-        isRefreshing = isRefreshing,
+        syncKeyInput = syncKeyInput,
+        isSyncing = isSyncing,
         catalogItems = catalogItems,
         latestNotice = latestNotice,
         onIntent = viewModel::onIntent,
@@ -96,35 +99,38 @@ fun EngineBottomSheetContent(
     inferenceMode: InferenceMode,
     runtimeStatus: EngineRuntimeStatus,
     serverUrlInput: String,
-    isRefreshing: Boolean,
+    syncKeyInput: String,
+    isSyncing: Boolean,
     catalogItems: List<ModelCatalogItemUi>,
     latestNotice: String?,
     onIntent: (EngineIntent) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val canRelease = runtimeStatus.engineState is EngineState.Ready ||
-        runtimeStatus.engineState is EngineState.Generating
-
     Column(
         modifier = modifier
             .fillMaxWidth()
             .verticalScroll(rememberScrollState())
             .navigationBarsPadding()
-            .padding(horizontal = 18.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+            .padding(horizontal = 20.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Icon(Icons.Rounded.Memory, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+            Icon(
+                imageVector = Icons.Rounded.Memory,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(20.dp),
+            )
             Text(
-                text = "端云推理与模型仓",
-                style = MaterialTheme.typography.titleLarge,
+                text = "推理与多端同步",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
             )
         }
 
-        // Edge MNN vs Cloud SSE Mode Switch
         SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
             SegmentedButton(
                 selected = inferenceMode == InferenceMode.OFFLINE_EDGE,
@@ -138,7 +144,7 @@ fun EngineBottomSheetContent(
                     )
                 },
             ) {
-                Text("纯离线 MNN")
+                Text("端侧离线")
             }
             SegmentedButton(
                 selected = inferenceMode == InferenceMode.CLOUD_COLLAB,
@@ -152,238 +158,344 @@ fun EngineBottomSheetContent(
                     )
                 },
             ) {
-                Text("云端协同 SSE")
+                Text("云端协同")
             }
         }
 
-        // Honest Native Memory & Backend Card
-        Card(
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
-            ),
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(14.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = "会话：${describeEngineState(runtimeStatus.engineState)}",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    Text(
-                        text = String.format(Locale.US, "RSS %.1f MB", runtimeStatus.residentMemoryMb),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                }
-
-                Text(
-                    text = if (runtimeStatus.isBackendAvailable) {
-                        "MNN 原生库：已链接 (arm64-v8a)"
-                    } else {
-                        "MNN 原生库：未内置（未加载前将诚实走本地规则兜底或云端 SSE）"
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-
-                val readyState = runtimeStatus.engineState as? EngineState.Ready
-                if (readyState != null && readyState.modelFootprintBytes > 0L) {
-                    Text(
-                        text = String.format(
-                            Locale.US,
-                            "当前模型常驻增量：+%.1f MB",
-                            readyState.modelFootprintBytes / (1024.0 * 1024.0),
-                        ),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.secondary,
-                    )
-                }
-
-                latestNotice?.let { notice ->
-                    Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = MaterialTheme.colorScheme.secondaryContainer,
-                    ) {
-                        Text(
-                            text = notice,
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                        )
-                    }
-                }
-
-                FilledTonalButton(
-                    onClick = { onIntent(EngineIntent.ReleaseMemoryNow) },
-                    enabled = canRelease,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.CleaningServices,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp),
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("立即释放引擎内存 (Unload Session)")
-                }
-            }
-        }
-
-        // Same-repo Gateway Manifest Sync
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            OutlinedTextField(
-                value = serverUrlInput,
-                onValueChange = { onIntent(EngineIntent.UpdateServerUrlInput(it)) },
-                label = { Text("同仓 FastAPI 网关地址") },
-                singleLine = true,
-                modifier = Modifier.weight(1f),
-            )
-            IconButton(
-                onClick = { onIntent(EngineIntent.SyncCatalog) },
-                enabled = !isRefreshing,
-            ) {
-                Icon(Icons.Rounded.Refresh, contentDescription = "同步模型清单")
-            }
-        }
-
-        // Single Qwen2.5-0.5B Model Entry
         catalogItems.forEach { item ->
-            ModelCatalogRow(
-                model = item.model,
-                downloadState = item.downloadState,
-                isBackendAvailable = runtimeStatus.isBackendAvailable,
-                isLoaded = (runtimeStatus.engineState as? EngineState.Ready)?.modelId == item.model.id,
+            FramelessModelRow(
+                item = item,
+                runtimeStatus = runtimeStatus,
                 onToggleDownload = { onIntent(EngineIntent.ToggleDownload(item.model)) },
                 onLoad = { onIntent(EngineIntent.LoadModel(item.model)) },
+                onRelease = { onIntent(EngineIntent.ReleaseMemoryNow) },
             )
         }
 
-        Spacer(modifier = Modifier.size(18.dp))
-    }
-}
+        HorizontalDivider(
+            thickness = 0.5.dp,
+            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+        )
 
-@Composable
-private fun ModelCatalogRow(
-    model: ModelDescriptorDto,
-    downloadState: ModelDownloadState,
-    isBackendAvailable: Boolean,
-    isLoaded: Boolean,
-    onToggleDownload: () -> Unit,
-    onLoad: () -> Unit,
-) {
-    val canLoad = downloadState is ModelDownloadState.Completed && isBackendAvailable
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text(
+                text = "多设备记忆同步",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
 
-    Card(
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Column {
-                Text(
-                    text = model.name,
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                val mb = model.sizeBytes / (1024 * 1024)
-                Text(
-                    text = "${model.quantization} · ${mb}MB · 需 ${model.minRamMb}MB RAM",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-
-            model.description?.let {
-                Text(
-                    text = it,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-
-            if (downloadState is ModelDownloadState.Downloading) {
-                LinearProgressIndicator(
-                    progress = { downloadState.progress },
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Text(
-                    text = "正在分片下载 ${downloadState.currentFileName} (${(downloadState.progress * 100).toInt()}%)",
-                    style = MaterialTheme.typography.labelSmall,
-                )
-            } else if (downloadState is ModelDownloadState.Failed) {
-                Text(
-                    text = "下载异常：${downloadState.message}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.error,
-                )
-            }
+            SheetTextField(
+                value = serverUrlInput,
+                onValueChange = { onIntent(EngineIntent.UpdateServerUrlInput(it)) },
+                placeholder = "服务器地址（如 http://192.168.1.10:8787）",
+                modifier = Modifier.fillMaxWidth(),
+            )
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                OutlinedButton(
-                    onClick = onToggleDownload,
+                SheetTextField(
+                    value = syncKeyInput,
+                    onValueChange = { onIntent(EngineIntent.UpdateSyncKeyInput(it)) },
+                    placeholder = "同步码（如 engram-demo）",
                     modifier = Modifier.weight(1f),
-                ) {
-                    val icon = when (downloadState) {
-                        is ModelDownloadState.Downloading -> Icons.Rounded.Pause
-                        is ModelDownloadState.Paused -> Icons.Rounded.PlayArrow
-                        else -> Icons.Rounded.CloudDownload
-                    }
-                    val label = when (downloadState) {
-                        is ModelDownloadState.Downloading -> "暂停下载"
-                        is ModelDownloadState.Paused -> "断点续传"
-                        is ModelDownloadState.Completed -> "权重已就绪"
-                        else -> "分片下载"
-                    }
-                    Icon(icon, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(label)
-                }
+                )
 
-                Button(
-                    onClick = onLoad,
-                    enabled = canLoad,
-                    modifier = Modifier.weight(1f),
+                ExpressivePillSurface(
+                    onClick = { onIntent(EngineIntent.SyncMemories) },
+                    enabled = !isSyncing,
+                    restCorner = 18.dp,
+                    pressedCorner = 10.dp,
+                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                    pressedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.28f),
+                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        if (isSyncing) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(15.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            )
+                        } else {
+                            Icon(
+                                imageVector = Icons.Rounded.Sync,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                            )
+                        }
+                        Text(
+                            text = if (isSyncing) "同步中" else "同步",
+                            style = MaterialTheme.typography.labelLarge,
+                        )
+                    }
+                }
+            }
+
+            val displayNotice = latestNotice ?: (runtimeStatus.engineState as? EngineState.Error)?.message
+            if (!displayNotice.isNullOrBlank()) {
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                    modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text(
-                        when {
-                            isLoaded -> "重载权重"
-                            !isBackendAvailable -> "需内置 .so"
-                            downloadState !is ModelDownloadState.Completed -> "待下载"
-                            else -> "加载模型"
-                        },
+                        text = displayNotice,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                     )
                 }
             }
         }
+
+        Spacer(modifier = Modifier.height(8.dp))
     }
 }
 
-private fun describeEngineState(state: EngineState): String = when (state) {
-    EngineState.Unloaded -> "未加载（已释放）"
-    is EngineState.Loading -> "加载 ${state.modelId}…"
-    is EngineState.Ready -> "${state.backendName} 就绪"
-    is EngineState.Generating -> "流式生成中 (${state.backendName})"
-    is EngineState.Releasing -> "释放中 (${state.reason.name})"
-    is EngineState.Error -> "不可用：${state.message}"
+@Composable
+private fun FramelessModelRow(
+    item: ModelCatalogItemUi,
+    runtimeStatus: EngineRuntimeStatus,
+    onToggleDownload: () -> Unit,
+    onLoad: () -> Unit,
+    onRelease: () -> Unit,
+) {
+    val engineState = runtimeStatus.engineState
+    val downloadState = item.downloadState
+    val isReady = engineState is EngineState.Ready && engineState.modelId == item.model.id
+    val isGenerating = engineState is EngineState.Generating && engineState.modelId == item.model.id
+    val isLoading = engineState is EngineState.Loading && engineState.modelId == item.model.id
+    val approxMb = (item.model.sizeBytes / (1024 * 1024)).coerceAtLeast(1)
+
+    val subtitle = when (downloadState) {
+        ModelDownloadState.Idle -> "离线模型 · 约 ${approxMb} MB（魔搭直连）"
+        is ModelDownloadState.Downloading -> {
+            val pct = (downloadState.progress * 100).toInt()
+            "下载中 $pct% · ${downloadState.currentFileName}"
+        }
+        is ModelDownloadState.Paused -> {
+            val pct = if (downloadState.totalBytes > 0L) {
+                (downloadState.bytesRead * 100 / downloadState.totalBytes).toInt().coerceIn(0, 99)
+            } else {
+                0
+            }
+            "已暂停 · $pct%"
+        }
+        is ModelDownloadState.Completed -> when {
+            isLoading -> "正在加载至内存…"
+            isGenerating -> "端侧推理中…"
+            isReady -> {
+                if (engineState.modelFootprintBytes > 0L) {
+                    String.format(
+                        Locale.US,
+                        "已就绪 · 占用 +%.0f MB",
+                        engineState.modelFootprintBytes / (1024.0 * 1024.0),
+                    )
+                } else {
+                    "已就绪"
+                }
+            }
+            runtimeStatus.isBackendAvailable -> "已下载 · 待命"
+            else -> "当前环境暂不支持原生库"
+        }
+        is ModelDownloadState.Failed -> "下载失败：${downloadState.message}"
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                Text(
+                    text = "${item.model.name} · ${item.model.quantization}",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (downloadState is ModelDownloadState.Failed) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+
+            when {
+                isReady || isGenerating -> {
+                    ExpressivePillSurface(
+                        onClick = onRelease,
+                        enabled = !isGenerating,
+                        restCorner = 18.dp,
+                        pressedCorner = 10.dp,
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                        pressedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(5.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.CleaningServices,
+                                contentDescription = null,
+                                modifier = Modifier.size(15.dp),
+                            )
+                            Text("释放内存", style = MaterialTheme.typography.labelLarge)
+                        }
+                    }
+                }
+                downloadState is ModelDownloadState.Completed -> {
+                    val canLoad = runtimeStatus.isBackendAvailable && !isLoading
+                    ExpressivePillSurface(
+                        onClick = onLoad,
+                        enabled = canLoad,
+                        restCorner = 18.dp,
+                        pressedCorner = 10.dp,
+                        containerColor = if (canLoad) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.surfaceVariant
+                        },
+                        pressedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.85f),
+                        contentColor = if (canLoad) {
+                            MaterialTheme.colorScheme.onPrimary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
+                        },
+                    ) {
+                        Text(
+                            text = if (isLoading) "加载中" else "加载模型",
+                            style = MaterialTheme.typography.labelLarge,
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                        )
+                    }
+                }
+                else -> {
+                    val (icon, label, containerColor, contentColor) = when (downloadState) {
+                        is ModelDownloadState.Downloading -> Quadruple(
+                            Icons.Rounded.Pause,
+                            "暂停",
+                            MaterialTheme.colorScheme.secondaryContainer,
+                            MaterialTheme.colorScheme.onSecondaryContainer,
+                        )
+                        is ModelDownloadState.Paused -> Quadruple(
+                            Icons.Rounded.PlayArrow,
+                            "继续",
+                            MaterialTheme.colorScheme.primary,
+                            MaterialTheme.colorScheme.onPrimary,
+                        )
+                        else -> Quadruple(
+                            Icons.Rounded.CloudDownload,
+                            "下载",
+                            MaterialTheme.colorScheme.primary,
+                            MaterialTheme.colorScheme.onPrimary,
+                        )
+                    }
+                    ExpressivePillSurface(
+                        onClick = onToggleDownload,
+                        restCorner = 18.dp,
+                        pressedCorner = 10.dp,
+                        containerColor = containerColor,
+                        pressedContainerColor = containerColor.copy(alpha = 0.85f),
+                        contentColor = contentColor,
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(5.dp),
+                        ) {
+                            Icon(icon, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Text(label, style = MaterialTheme.typography.labelLarge)
+                        }
+                    }
+                }
+            }
+        }
+
+        if (downloadState is ModelDownloadState.Downloading) {
+            LinearProgressIndicator(
+                progress = { downloadState.progress },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(4.dp)
+                    .clip(RoundedCornerShape(2.dp)),
+            )
+        } else if (downloadState is ModelDownloadState.Paused && downloadState.totalBytes > 0L) {
+            LinearProgressIndicator(
+                progress = { (downloadState.bytesRead.toFloat() / downloadState.totalBytes.toFloat()).coerceIn(0f, 1f) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(4.dp)
+                    .clip(RoundedCornerShape(2.dp)),
+            )
+        }
+    }
 }
+
+@Composable
+private fun SheetTextField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    placeholder: String,
+    modifier: Modifier = Modifier,
+) {
+    val textStyle = MaterialTheme.typography.bodyMedium.copy(
+        color = MaterialTheme.colorScheme.onSurface,
+    )
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+    ) {
+        BasicTextField(
+            value = value,
+            onValueChange = onValueChange,
+            singleLine = true,
+            textStyle = textStyle,
+            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 11.dp),
+            decorationBox = { innerTextField ->
+                Box(contentAlignment = Alignment.CenterStart) {
+                    if (value.isEmpty()) {
+                        Text(
+                            text = placeholder,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    innerTextField()
+                }
+            },
+        )
+    }
+}
+
+private data class Quadruple<A, B, C, D>(
+    val first: A,
+    val second: B,
+    val third: C,
+    val fourth: D,
+)

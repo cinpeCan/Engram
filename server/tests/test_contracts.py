@@ -28,17 +28,118 @@ def test_health_endpoint() -> None:
     assert resp.json()["status"] == "ok"
 
 
-def test_manifest_matches_contract_schema() -> None:
-    schema = _load_schema("model-manifest.schema.json")
-    resp = client.get("/api/v1/models/manifest")
-    assert resp.status_code == 200
-    payload = resp.json()
-    jsonschema.validate(instance=payload, schema=schema)
-    assert len(payload["models"]) == 1
-    model = payload["models"][0]
-    assert model["id"] == "qwen2.5-0.5b-instruct-mnn"
-    assert model["role"] == "generation"
-    assert model["sha256"] is None
+def test_multi_device_sync_merges_by_timestamp_and_isolates_sync_keys(tmp_path, monkeypatch) -> None:
+    db_path = tmp_path / "sync_test.db"
+    monkeypatch.setenv("ENGRAM_DB_PATH", str(db_path))
+
+    sync_schema = _load_schema("memory-sync.schema.json")
+    req_validator = jsonschema.Draft202012Validator(
+        {
+            "$schema": sync_schema["$schema"],
+            "$defs": sync_schema["$defs"],
+            "$ref": "#/$defs/MemorySyncRequest",
+        }
+    )
+    resp_validator = jsonschema.Draft202012Validator(
+        {
+            "$schema": sync_schema["$schema"],
+            "$defs": sync_schema["$defs"],
+            "$ref": "#/$defs/MemorySyncResponse",
+        }
+    )
+
+    device_a_req = {
+        "syncKey": "workspace-alpha",
+        "memories": [
+            {
+                "id": "mem_1",
+                "content": "明天下午3点在软件园B座和张姐对齐合同。",
+                "summary": "• 明日 15:00 · 软件园B座\n• 与张姐对齐合同",
+                "tags": ["商务合同", "日程提醒"],
+                "createdAtMillis": 1700000000000,
+                "updatedAtMillis": 1700000001000,
+                "analysisStatus": "READY",
+                "calendarProposal": {
+                    "title": "合同对齐",
+                    "startTimeIso": "2026-11-19T15:00:00",
+                    "durationMinutes": 60,
+                    "location": "软件园B座",
+                },
+                "calendarSaved": False,
+                "analysisSource": "MNN_EDGE",
+                "telemetryBadge": "MNN 0.5B · TTFT 120ms · 32.0 tok/s",
+                "relations": [
+                    {
+                        "source": "张姐",
+                        "target": "合同",
+                        "relation": "对齐条款",
+                        "bidirectional": False,
+                    }
+                ],
+            }
+        ],
+    }
+    req_validator.validate(device_a_req)
+    resp_a = client.post("/api/v1/memories/sync", json=device_a_req)
+    assert resp_a.status_code == 200
+    body_a = resp_a.json()
+    resp_validator.validate(body_a)
+    assert body_a["upsertedCount"] == 1
+    assert body_a["totalCount"] == 1
+
+    # Device B brings stale version of mem_1 (older updatedAtMillis) and a new mem_2
+    device_b_req = {
+        "syncKey": "workspace-alpha",
+        "memories": [
+            {
+                "id": "mem_1",
+                "content": "明天下午3点在软件园B座和张姐对齐合同。",
+                "summary": "旧摘要不应覆盖",
+                "tags": [],
+                "createdAtMillis": 1700000000000,
+                "updatedAtMillis": 1700000000500,
+                "analysisStatus": "PENDING",
+                "calendarProposal": None,
+                "calendarSaved": False,
+                "analysisSource": "LOCAL_RULE_FALLBACK",
+                "telemetryBadge": "",
+                "relations": [],
+            },
+            {
+                "id": "mem_2",
+                "content": "陈工提交烧屏验收报告",
+                "summary": "陈工提交烧屏验收报告",
+                "tags": ["项目推进"],
+                "createdAtMillis": 1700000005000,
+                "updatedAtMillis": 1700000005000,
+                "analysisStatus": "READY",
+                "calendarProposal": None,
+                "calendarSaved": False,
+                "analysisSource": "CLOUD_SSE",
+                "telemetryBadge": "Cloud SSE · TTFT 95ms · 60.0 tok/s",
+                "relations": [],
+            },
+        ],
+    }
+    req_validator.validate(device_b_req)
+    resp_b = client.post("/api/v1/memories/sync", json=device_b_req)
+    assert resp_b.status_code == 200
+    body_b = resp_b.json()
+    resp_validator.validate(body_b)
+    assert body_b["upsertedCount"] == 1
+    assert body_b["totalCount"] == 2
+    by_id = {m["id"]: m for m in body_b["memories"]}
+    assert by_id["mem_1"]["analysisStatus"] == "READY"
+    assert by_id["mem_1"]["telemetryBadge"].startswith("MNN 0.5B")
+    assert by_id["mem_2"]["analysisSource"] == "CLOUD_SSE"
+
+    # Separate syncKey stays isolated
+    other_resp = client.post(
+        "/api/v1/memories/sync",
+        json={"syncKey": "workspace-beta", "memories": []},
+    )
+    assert other_resp.status_code == 200
+    assert other_resp.json()["totalCount"] == 0
 
 
 def test_analyze_stream_returns_503_when_api_key_missing(monkeypatch) -> None:
@@ -48,7 +149,7 @@ def test_analyze_stream_returns_503_when_api_key_missing(monkeypatch) -> None:
         json={
             "content": "明天下午3点和张姐对齐柔性屏采购合同。",
             "nowIso": "2026-11-18T09:00:00",
-            "model": "gpt-4o-mini",
+            "model": "qwen-turbo",
         },
     )
     assert resp.status_code == 503
@@ -110,7 +211,7 @@ def test_analyze_stream_sse_matches_contract_and_analysis_schema(monkeypatch) ->
 
     monkeypatch.setenv("ENGRAM_CLOUD_API_KEY", "sk-test-valid")
     monkeypatch.setenv("ENGRAM_CLOUD_BASE_URL", "https://example.invalid/v1")
-    monkeypatch.setenv("ENGRAM_CLOUD_MODEL", "gpt-4o-mini")
+    monkeypatch.setenv("ENGRAM_CLOUD_MODEL", "qwen-turbo")
     monkeypatch.setattr("app.main.httpx.AsyncClient", MockAsyncClient)
 
     sse_schema = _load_schema("analysis-sse.schema.json")
@@ -134,7 +235,7 @@ def test_analyze_stream_sse_matches_contract_and_analysis_schema(monkeypatch) ->
     request_body = {
         "content": "明天下午15:00在软件园三期B区7楼会议室，和法务张姐过一遍柔性屏采购合同补充条款。",
         "nowIso": "2026-11-18T09:00:00",
-        "model": "gpt-4o-mini",
+        "model": "qwen-turbo",
     }
     req_validator.validate(request_body)
 
@@ -192,7 +293,7 @@ def test_analyze_stream_emits_error_chunk_when_upstream_fails(monkeypatch) -> No
     request_body = {
         "content": "合同卡在法务张姐条款对齐。",
         "nowIso": "2026-11-18T09:00:00",
-        "model": "gpt-4o-mini",
+        "model": "qwen-turbo",
     }
 
     chunks = []

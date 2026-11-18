@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/cinpeCan/Engram/contracts/memory-sync.schema.json",
+  "title": "EngramMultiDeviceSyncContract",
+  "description": "Bidirectional Last-Write-Wins incremental synchronization contract across devices sharing a syncKey.",
+  "$defs": {
+    "SyncCalendarProposal": {
+      "type": "object",
+      "required": ["title", "startTimeIso", "durationMinutes"],
+      "additionalProperties": false,
+      "properties": {
+        "title": { "type": "string", "minLength": 1 },
+        "startTimeIso": { "type": "string", "minLength": 10 },
+        "durationMinutes": { "type": "integer", "minimum": 5, "maximum": 480 },
+        "location": { "type": ["string", "null"] }
+      }
+    },
+    "SyncRelationTriple": {
+      "type": "object",
+      "required": ["source", "target", "relation", "bidirectional"],
+      "additionalProperties": false,
+      "properties": {
+        "source": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "target": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "relation": { "type": "string", "minLength": 1, "maxLength": 24 },
+        "bidirectional": { "type": "boolean" }
+      }
+    },
+    "SyncMemoryItem": {
+      "type": "object",
+      "required": [
+        "id",
+        "content",
+        "summary",
+        "tags",
+        "createdAtMillis",
+        "updatedAtMillis",
+        "analysisStatus",
+        "calendarProposal",
+        "calendarSaved",
+        "analysisSource",
+        "telemetryBadge",
+        "relations"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "content": { "type": "string", "minLength": 1 },
+        "summary": { "type": "string" },
+        "tags": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "createdAtMillis": { "type": "integer", "minimum": 0 },
+        "updatedAtMillis": { "type": "integer", "minimum": 0 },
+        "analysisStatus": { "type": "string", "enum": ["PENDING", "READY"] },
+        "calendarProposal": {
+          "oneOf": [
+            { "$ref": "#/$defs/SyncCalendarProposal" },
+            { "type": "null" }
+          ]
+        },
+        "calendarSaved": { "type": "boolean" },
+        "analysisSource": {
+          "type": "string",
+          "enum": ["MNN_EDGE", "CLOUD_SSE", "LOCAL_RULE_FALLBACK", "SEED"]
+        },
+        "telemetryBadge": { "type": "string" },
+        "relations": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/SyncRelationTriple" }
+        }
+      }
+    },
+    "MemorySyncRequest": {
+      "type": "object",
+      "required": ["syncKey", "memories"],
+      "additionalProperties": false,
+      "properties": {
+        "syncKey": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "memories": {
+          "type": "array",
+          "maxItems": 500,
+          "items": { "$ref": "#/$defs/SyncMemoryItem" }
+        }
+      }
+    },
+    "MemorySyncResponse": {
+      "type": "object",
+      "required": ["syncKey", "upsertedCount", "totalCount", "serverTimeMillis", "memories"],
+      "additionalProperties": false,
+      "properties": {
+        "syncKey": { "type": "string", "minLength": 1 },
+        "upsertedCount": { "type": "integer", "minimum": 0 },
+        "totalCount": { "type": "integer", "minimum": 0 },
+        "serverTimeMillis": { "type": "integer", "minimum": 0 },
+        "memories": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/SyncMemoryItem" }
+        }
+      }
+    }
+  }
+}

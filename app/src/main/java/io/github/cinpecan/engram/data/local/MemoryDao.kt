@@ -36,6 +36,9 @@ interface MemoryDao {
     @Query("SELECT * FROM memories ORDER BY created_at DESC")
     suspend fun getAllMemories(): List<MemoryWithRelations>
 
+    @Query("SELECT * FROM memories WHERE id = :memoryId LIMIT 1")
+    suspend fun getMemoryEntity(memoryId: String): MemoryEntity?
+
     @Query("SELECT content FROM memories WHERE id = :memoryId LIMIT 1")
     suspend fun getMemoryContent(memoryId: String): String?
 
@@ -50,7 +53,8 @@ interface MemoryDao {
             analysis_status = :status,
             calendar_json = :calendarJson,
             analysis_source = :analysisSource,
-            telemetry_badge = :telemetryBadge
+            telemetry_badge = :telemetryBadge,
+            updated_at = :updatedAtMillis
         WHERE id = :memoryId
         """,
     )
@@ -62,10 +66,11 @@ interface MemoryDao {
         calendarJson: String?,
         analysisSource: String,
         telemetryBadge: String,
+        updatedAtMillis: Long,
     )
 
-    @Query("UPDATE memories SET calendar_saved = 1 WHERE id = :memoryId")
-    suspend fun markCalendarSaved(memoryId: String)
+    @Query("UPDATE memories SET calendar_saved = 1, updated_at = :updatedAtMillis WHERE id = :memoryId")
+    suspend fun markCalendarSaved(memoryId: String, updatedAtMillis: Long)
 
     @Query("DELETE FROM memory_relations WHERE memory_id = :memoryId")
     suspend fun deleteRelationsForMemory(memoryId: String)

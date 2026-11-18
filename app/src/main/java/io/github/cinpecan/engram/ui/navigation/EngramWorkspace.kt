@@ -149,20 +149,14 @@ private fun EngineStatusPill(
     )
 
     val text = when {
-        engineState is EngineState.Loading -> "MNN 加载中…"
-        engineState is EngineState.Generating -> "MNN 推理中…"
+        engineState is EngineState.Loading -> "加载模型中…"
+        engineState is EngineState.Generating -> "端侧推理中…"
         engineState is EngineState.Releasing -> "释放内存中…"
-        engineState is EngineState.Error -> "端侧未就绪"
         inferenceMode == InferenceMode.CLOUD_COLLAB -> {
-            if (engineState is EngineState.Ready) "云端 SSE · MNN 就绪" else "云端 SSE"
+            if (engineState is EngineState.Ready) "云端 · 端侧待命" else "云端协同"
         }
-        engineState is EngineState.Ready -> String.format(
-            Locale.US,
-            "MNN 就绪 · %.0fMB",
-            engineState.residentMemoryBytes / (1024.0 * 1024.0),
-        )
-        isBackendAvailable -> "MNN 待命"
-        else -> "规则兜底"
+        engineState is EngineState.Ready -> "Qwen 0.5B · 就绪"
+        else -> "端侧离线"
     }
 
     ExpressivePillSurface(
@@ -172,7 +166,7 @@ private fun EngineStatusPill(
         pressedCorner = 10.dp,
         containerColor = MaterialTheme.colorScheme.surfaceVariant,
         contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-        contentDescription = "引擎与模型状态：$text",
+        contentDescription = "推理与同步：$text",
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),

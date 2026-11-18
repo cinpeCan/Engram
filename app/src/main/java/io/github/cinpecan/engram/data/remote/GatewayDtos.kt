@@ -10,6 +10,7 @@ data class ModelFileDto(
     val url: String,
     val sizeBytes: Long,
     val sha256: String? = null,
+    val fallbackUrl: String? = null,
 )
 
 @Immutable
@@ -29,16 +30,10 @@ data class ModelDescriptorDto(
 )
 
 @Serializable
-data class ModelManifestResponseDto(
-    val schemaVersion: String,
-    val models: List<ModelDescriptorDto>,
-)
-
-@Serializable
 data class AnalysisStreamRequestDto(
     val content: String,
     val nowIso: String,
-    val model: String = "gpt-4o-mini",
+    val model: String = "qwen-turbo",
 )
 
 @Serializable
@@ -48,4 +43,51 @@ data class AnalysisStreamChunkDto(
     val model: String,
     val latencyMs: Long,
     val error: String? = null,
+)
+
+@Serializable
+data class SyncCalendarProposalDto(
+    val title: String,
+    val startTimeIso: String,
+    val durationMinutes: Int = 60,
+    val location: String? = null,
+)
+
+@Serializable
+data class SyncRelationTripleDto(
+    val source: String,
+    val target: String,
+    val relation: String,
+    val bidirectional: Boolean = false,
+)
+
+@Serializable
+data class SyncMemoryItemDto(
+    val id: String,
+    val content: String,
+    val summary: String,
+    val tags: List<String>,
+    val createdAtMillis: Long,
+    val updatedAtMillis: Long,
+    val analysisStatus: String,
+    val calendarProposal: SyncCalendarProposalDto? = null,
+    val calendarSaved: Boolean = false,
+    val analysisSource: String,
+    val telemetryBadge: String = "",
+    val relations: List<SyncRelationTripleDto> = emptyList(),
+)
+
+@Serializable
+data class MemorySyncRequestDto(
+    val syncKey: String,
+    val memories: List<SyncMemoryItemDto>,
+)
+
+@Serializable
+data class MemorySyncResponseDto(
+    val syncKey: String,
+    val upsertedCount: Int,
+    val totalCount: Int,
+    val serverTimeMillis: Long,
+    val memories: List<SyncMemoryItemDto>,
 )

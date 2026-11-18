@@ -82,9 +82,9 @@ class UnifiedInferenceRouter(
 
         val fallbackPayload = analyzer.fallbackAnalyze(content, nowMillis)
         val fallbackBadge = if (degradedFromCloud) {
-            "云端未连接 · 本地规则兜底"
+            "云端未连接 · 已用本地提炼"
         } else {
-            "本地规则兜底"
+            ""
         }
         emit(
             DistillationEvent.Completed(

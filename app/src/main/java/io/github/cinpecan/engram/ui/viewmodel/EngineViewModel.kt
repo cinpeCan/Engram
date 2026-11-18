@@ -8,6 +8,7 @@ import io.github.cinpecan.engram.data.preferences.EnginePreferencesRepository
 import io.github.cinpecan.engram.data.remote.ModelDescriptorDto
 import io.github.cinpecan.engram.data.remote.ModelDownloadManager
 import io.github.cinpecan.engram.data.remote.ModelDownloadState
+import io.github.cinpecan.engram.data.repository.MemoryRepository
 import io.github.cinpecan.engram.domain.model.InferenceMode
 import io.github.cinpecan.engram.edgemnn.EdgeAiEngine
 import io.github.cinpecan.engram.edgemnn.EngineState
@@ -30,7 +31,8 @@ import kotlinx.coroutines.launch
 sealed interface EngineIntent {
     data class SelectMode(val mode: InferenceMode) : EngineIntent
     data class UpdateServerUrlInput(val url: String) : EngineIntent
-    data object SyncCatalog : EngineIntent
+    data class UpdateSyncKeyInput(val syncKey: String) : EngineIntent
+    data object SyncMemories : EngineIntent
     data class ToggleDownload(val model: ModelDescriptorDto) : EngineIntent
     data class LoadModel(val model: ModelDescriptorDto) : EngineIntent
     data object ReleaseMemoryNow : EngineIntent
@@ -58,15 +60,20 @@ class EngineViewModel(
     private val edgeEngine: EdgeAiEngine,
     private val downloadManager: ModelDownloadManager,
     private val preferencesRepository: EnginePreferencesRepository,
+    private val memoryRepository: MemoryRepository,
 ) : ViewModel() {
 
     private val serverUrlInputFlow = MutableStateFlow(EnginePreferences.DEFAULT_SERVER_BASE_URL)
     val serverUrlInput: StateFlow<String> = serverUrlInputFlow.asStateFlow()
 
-    private val isRefreshingFlow = MutableStateFlow(false)
-    val isRefreshing: StateFlow<Boolean> = isRefreshingFlow.asStateFlow()
+    private val syncKeyInputFlow = MutableStateFlow(EnginePreferences.DEFAULT_SYNC_KEY)
+    val syncKeyInput: StateFlow<String> = syncKeyInputFlow.asStateFlow()
+
+    private val isSyncingFlow = MutableStateFlow(false)
+    val isSyncing: StateFlow<Boolean> = isSyncingFlow.asStateFlow()
 
     private var hasUserEditedServerUrl = false
+    private var hasUserEditedSyncKey = false
 
     private val effectChannel = Channel<EngineEffect>(Channel.BUFFERED)
     val effects: Flow<EngineEffect> = effectChannel.receiveAsFlow()
@@ -114,9 +121,21 @@ class EngineViewModel(
 
     init {
         viewModelScope.launch {
-            val savedUrl = preferencesRepository.preferencesFlow.first().serverBaseUrl
+            val prefs = preferencesRepository.preferencesFlow.first()
             if (!hasUserEditedServerUrl) {
-                serverUrlInputFlow.value = savedUrl
+                serverUrlInputFlow.value = prefs.serverBaseUrl
+            }
+            if (!hasUserEditedSyncKey) {
+                syncKeyInputFlow.value = prefs.syncKey
+            }
+        }
+        viewModelScope.launch {
+            downloadManager.downloadStates.collect { states ->
+                states.forEach { (modelId, dlState) ->
+                    if (dlState is ModelDownloadState.Completed) {
+                        edgeEngine.configureDefaultModel(modelId, dlState.localDirPath)
+                    }
+                }
             }
         }
     }
@@ -132,29 +151,42 @@ class EngineViewModel(
                 hasUserEditedServerUrl = true
                 serverUrlInputFlow.value = intent.url
             }
-            EngineIntent.SyncCatalog -> syncCatalog()
+            is EngineIntent.UpdateSyncKeyInput -> {
+                hasUserEditedSyncKey = true
+                syncKeyInputFlow.value = intent.syncKey
+            }
+            EngineIntent.SyncMemories -> syncMemories()
             is EngineIntent.ToggleDownload -> toggleDownload(intent.model)
             is EngineIntent.LoadModel -> loadModel(intent.model)
             EngineIntent.ReleaseMemoryNow -> releaseMemoryNow()
         }
     }
 
-    private fun syncCatalog() {
+    private fun syncMemories() {
         val normalizedUrl = serverUrlInputFlow.value.trim().trimEnd('/')
             .ifEmpty { EnginePreferences.DEFAULT_SERVER_BASE_URL }
+        val normalizedKey = syncKeyInputFlow.value.trim()
+            .ifEmpty { EnginePreferences.DEFAULT_SYNC_KEY }
+
         viewModelScope.launch {
-            isRefreshingFlow.value = true
+            isSyncingFlow.value = true
             try {
-                preferencesRepository.setServerBaseUrl(normalizedUrl)
+                preferencesRepository.updateSyncConfig(normalizedUrl, normalizedKey)
                 serverUrlInputFlow.value = normalizedUrl
-                val res = downloadManager.fetchCatalog(normalizedUrl)
-                val msg = res.fold(
-                    onSuccess = { list -> "已保存网关地址并同步清单（${list.size} 个模型）" },
-                    onFailure = { "已保存网关地址；网关未连接，当前使用内置模型清单" },
+                syncKeyInputFlow.value = normalizedKey
+
+                val result = memoryRepository.syncWithServer(normalizedUrl, normalizedKey)
+                val msg = result.fold(
+                    onSuccess = { summary ->
+                        "同步完成 · 拉取 ${summary.pulledCount} 条更新，云端共 ${summary.totalRemoteCount} 条"
+                    },
+                    onFailure = { err ->
+                        "已保存配置，暂未连上同步服务（${err.message ?: "请检查地址"}）"
+                    },
                 )
                 effectChannel.send(EngineEffect.ShowMessage(msg))
             } finally {
-                isRefreshingFlow.value = false
+                isSyncingFlow.value = false
             }
         }
     }
@@ -171,18 +203,18 @@ class EngineViewModel(
     private fun loadModel(model: ModelDescriptorDto) {
         val completed = downloadManager.downloadStates.value[model.id] as? ModelDownloadState.Completed
         if (completed == null) {
-            effectChannel.trySend(EngineEffect.ShowMessage("请先完整下载模型权重后再加载"))
+            effectChannel.trySend(EngineEffect.ShowMessage("请先下载模型文件"))
             return
         }
         if (!edgeEngine.isBackendAvailable) {
-            effectChannel.trySend(EngineEffect.ShowMessage("当前安装包未内置 MNN 原生库，无法加载权重"))
+            effectChannel.trySend(EngineEffect.ShowMessage("当前运行环境未启用原生推理库"))
             return
         }
         viewModelScope.launch {
             val result = edgeEngine.loadModel(model.id, completed.localDirPath)
             val msg = if (result.isSuccess) {
                 preferencesRepository.setSelectedModelId(model.id)
-                "已加载本地量化权重：${model.name}"
+                "模型已加载就绪"
             } else {
                 "加载失败：${result.exceptionOrNull()?.message}"
             }
@@ -200,7 +232,7 @@ class EngineViewModel(
             val mb = reclaimedBytes / (1024.0 * 1024.0)
             effectChannel.send(
                 EngineEffect.ShowMessage(
-                    String.format(Locale.US, "已卸载端侧会话，回收内存 %.1f MB", mb),
+                    String.format(Locale.US, "已释放模型内存 %.1f MB", mb),
                 ),
             )
         }

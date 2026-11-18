@@ -19,11 +19,13 @@ data class EnginePreferences(
     val inferenceMode: InferenceMode = InferenceMode.OFFLINE_EDGE,
     val selectedModelId: String = DEFAULT_MODEL_ID,
     val serverBaseUrl: String = DEFAULT_SERVER_BASE_URL,
+    val syncKey: String = DEFAULT_SYNC_KEY,
     val hasSeededStoryline: Boolean = false,
 ) {
     companion object {
         const val DEFAULT_MODEL_ID = "qwen2.5-0.5b-instruct-mnn"
-        const val DEFAULT_SERVER_BASE_URL = "http://10.0.2.2:8787"
+        const val DEFAULT_SERVER_BASE_URL = "http://127.0.0.1:8787"
+        const val DEFAULT_SYNC_KEY = "engram-demo"
     }
 }
 
@@ -43,6 +45,7 @@ class EnginePreferencesRepository internal constructor(
             inferenceMode = mode,
             selectedModelId = prefs[KEY_SELECTED_MODEL_ID] ?: EnginePreferences.DEFAULT_MODEL_ID,
             serverBaseUrl = prefs[KEY_SERVER_BASE_URL] ?: EnginePreferences.DEFAULT_SERVER_BASE_URL,
+            syncKey = prefs[KEY_SYNC_KEY] ?: EnginePreferences.DEFAULT_SYNC_KEY,
             hasSeededStoryline = prefs[KEY_HAS_SEEDED] ?: false,
         )
     }
@@ -66,6 +69,22 @@ class EnginePreferencesRepository internal constructor(
         }
     }
 
+    suspend fun setSyncKey(syncKey: String) {
+        val cleaned = syncKey.trim().ifEmpty { EnginePreferences.DEFAULT_SYNC_KEY }
+        dataStore.edit { prefs ->
+            prefs[KEY_SYNC_KEY] = cleaned
+        }
+    }
+
+    suspend fun updateSyncConfig(serverBaseUrl: String, syncKey: String) {
+        val cleanedUrl = serverBaseUrl.trim().trimEnd('/').ifEmpty { EnginePreferences.DEFAULT_SERVER_BASE_URL }
+        val cleanedKey = syncKey.trim().ifEmpty { EnginePreferences.DEFAULT_SYNC_KEY }
+        dataStore.edit { prefs ->
+            prefs[KEY_SERVER_BASE_URL] = cleanedUrl
+            prefs[KEY_SYNC_KEY] = cleanedKey
+        }
+    }
+
     suspend fun markStorylineSeeded() {
         dataStore.edit { prefs ->
             prefs[KEY_HAS_SEEDED] = true
@@ -76,6 +95,7 @@ class EnginePreferencesRepository internal constructor(
         val KEY_INFERENCE_MODE = stringPreferencesKey("inference_mode")
         val KEY_SELECTED_MODEL_ID = stringPreferencesKey("selected_model_id")
         val KEY_SERVER_BASE_URL = stringPreferencesKey("server_base_url")
+        val KEY_SYNC_KEY = stringPreferencesKey("sync_key")
         val KEY_HAS_SEEDED = booleanPreferencesKey("has_seeded_storyline")
     }
 }

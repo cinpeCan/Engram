@@ -2,9 +2,11 @@ package io.github.cinpecan.engram.data.remote
 
 import android.content.Context
 import java.io.File
+import java.io.IOException
 import java.io.RandomAccessFile
 import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -40,14 +42,15 @@ sealed interface ModelDownloadState {
 }
 
 /**
- * Resumable HTTP Range downloader backed by [RandomAccessFile], header-calibrated byte progress,
- * and SHA-256 verification with `.sha256` completion markers.
+ * Resumable HTTP Range downloader fetching quantized MNN weights directly from open-source hosts
+ * (ModelScope primary + HuggingFace automatic fallback), backed by [RandomAccessFile] and SHA-256 checks.
  */
 class ModelDownloadManager internal constructor(
     private val primaryModelsDir: File,
     private val externalModelsDir: File?,
     private val okHttpClient: OkHttpClient,
     private val json: Json = Json { ignoreUnknownKeys = true },
+    initialCatalog: List<ModelDescriptorDto> = builtInCatalog(),
 ) {
     constructor(
         context: Context,
@@ -58,13 +61,14 @@ class ModelDownloadManager internal constructor(
         externalModelsDir = context.applicationContext.getExternalFilesDir(null)?.let { File(it, "models") },
         okHttpClient = okHttpClient,
         json = json,
+        initialCatalog = builtInCatalog(),
     )
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val activeCalls = ConcurrentHashMap<String, Call>()
     private val activeJobs = ConcurrentHashMap<String, Job>()
 
-    private val _catalog = MutableStateFlow(builtInCatalog())
+    private val _catalog = MutableStateFlow(initialCatalog)
     val catalog: StateFlow<List<ModelDescriptorDto>> = _catalog.asStateFlow()
 
     private val _downloadStates = MutableStateFlow<Map<String, ModelDownloadState>>(emptyMap())
@@ -94,15 +98,6 @@ class ModelDownloadManager internal constructor(
             _downloadStates.update { current -> current + updates }
         }
     }
-
-    suspend fun fetchCatalog(serverBaseUrl: String): Result<List<ModelDescriptorDto>> =
-        runCatching {
-            val api = ManifestApi.create(serverBaseUrl, okHttpClient, json)
-            val response = api.getModelManifest()
-            _catalog.value = response.models
-            refreshLocalModelStates()
-            response.models
-        }
 
     fun resolveModelDirectory(modelId: String): File =
         File(primaryModelsDir, modelId)
@@ -145,7 +140,6 @@ class ModelDownloadManager internal constructor(
             return true
         }
 
-        // Fallback verification for externally pushed bundles (`adb push`)
         if (spec.sha256 != null) {
             return computeSha256(finalFile) == spec.sha256
         }
@@ -201,125 +195,48 @@ class ModelDownloadManager internal constructor(
                         continue
                     }
 
-                    val partFile = File(targetDir, "${fileSpec.name}.part")
-                    var existingBytes = if (partFile.exists()) partFile.length() else 0L
-                    var forceFresh = false
-
-                    while (true) {
-                        val requestBuilder = Request.Builder().url(fileSpec.url)
-                        if (existingBytes > 0L && !forceFresh) {
-                            requestBuilder.header("Range", "bytes=$existingBytes-")
-                        }
-
-                        val call = okHttpClient.newCall(requestBuilder.build())
-                        activeCalls[model.id] = call
-
-                        var retryFresh = false
-                        call.execute().use { response ->
-                            if (response.code == 416 && existingBytes > 0L) {
-                                val rangeTotal = parseContentRangeTotal(response)
-                                if (rangeTotal != null && existingBytes == rangeTotal) {
-                                    knownFileSizes[fileSpec.name] = rangeTotal
-                                    finalizeCompletedPart(partFile, finalFile, fileSpec)?.let { lastDigestHex = it }
-                                    cumulativeDone += finalFile.length()
-                                    enqueueEmbeddingIfDeclared(fileSpec, finalFile, pendingSpecs, knownFileSizes)
-                                    break
-                                }
-                                partFile.delete()
-                                existingBytes = 0L
-                                forceFresh = true
-                                retryFresh = true
-                                return@use
-                            }
-
-                            if (!response.isSuccessful && response.code != 206) {
-                                error("HTTP ${response.code} downloading ${fileSpec.name}")
-                            }
-
-                            val appendMode = response.code == 206 && existingBytes > 0L
-                            val body = response.body ?: error("Empty body for ${fileSpec.name}")
-                            val expectedFileBytes = resolveExpectedFileBytes(
-                                response = response,
-                                appendMode = appendMode,
-                                existingBytes = existingBytes,
-                                bodyContentLength = body.contentLength(),
-                            )
-                            if (expectedFileBytes != null && expectedFileBytes > 0L) {
-                                knownFileSizes[fileSpec.name] = expectedFileBytes
-                            }
-
-                            val buffer = ByteArray(16 * 1024)
-                            var fileWritten = if (appendMode) existingBytes else 0L
-                            var lastEmittedBytes = -1L
-
-                            RandomAccessFile(partFile, "rw").use { raf ->
-                                if (appendMode) {
-                                    raf.seek(existingBytes)
-                                } else {
-                                    raf.setLength(0L)
-                                }
-                                body.byteStream().use { input ->
-                                    while (isActive) {
-                                        val read = input.read(buffer)
-                                        if (read == -1) break
-                                        raf.write(buffer, 0, read)
-                                        fileWritten += read
-                                        if (lastEmittedBytes < 0L || fileWritten - lastEmittedBytes >= 64 * 1024) {
-                                            lastEmittedBytes = fileWritten
-                                            val totalNow = totalKnownBytes()
-                                            _downloadStates.update {
-                                                it + (
-                                                    model.id to ModelDownloadState.Downloading(
-                                                        bytesRead = (cumulativeDone + fileWritten).coerceAtMost(totalNow),
-                                                        totalBytes = totalNow,
-                                                        currentFileName = fileSpec.name,
-                                                    )
-                                                    )
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            if (!isActive) {
-                                _downloadStates.update {
-                                    it + (
-                                        model.id to ModelDownloadState.Paused(
-                                            bytesRead = cumulativeDone + fileWritten,
-                                            totalBytes = totalKnownBytes(),
-                                        )
-                                        )
-                                }
-                                return@launch
-                            }
-
-                            if (expectedFileBytes != null && expectedFileBytes > 0L && fileWritten != expectedFileBytes) {
-                                error("文件 ${fileSpec.name} 下载未完整 ($fileWritten/$expectedFileBytes)")
-                            }
-
-                            lastDigestHex = finalizeCompletedPart(partFile, finalFile, fileSpec)
-                                ?: lastDigestHex
-                            val totalNow = totalKnownBytes()
-                            cumulativeDone += finalFile.length()
+                    val candidateUrls = listOfNotNull(fileSpec.url, fileSpec.fallbackUrl).distinct()
+                    val digest = downloadFileWithMirrors(
+                        modelId = model.id,
+                        fileSpec = fileSpec,
+                        candidateUrls = candidateUrls,
+                        targetDir = targetDir,
+                        finalFile = finalFile,
+                        cumulativeDoneBeforeFile = cumulativeDone,
+                        knownFileSizes = knownFileSizes,
+                        totalKnownBytes = ::totalKnownBytes,
+                        onPaused = { pausedRead ->
                             _downloadStates.update {
                                 it + (
-                                    model.id to ModelDownloadState.Downloading(
-                                        bytesRead = cumulativeDone.coerceAtMost(totalNow),
-                                        totalBytes = totalNow,
-                                        currentFileName = fileSpec.name,
+                                    model.id to ModelDownloadState.Paused(
+                                        bytesRead = cumulativeDone + pausedRead,
+                                        totalBytes = totalKnownBytes(),
                                     )
                                     )
                             }
-                            enqueueEmbeddingIfDeclared(fileSpec, finalFile, pendingSpecs, knownFileSizes)
-                        }
+                        },
+                    ) ?: return@launch
 
-                        if (!retryFresh) break
+                    lastDigestHex = digest
+                    val totalNow = totalKnownBytes()
+                    cumulativeDone += finalFile.length()
+                    _downloadStates.update {
+                        it + (
+                            model.id to ModelDownloadState.Downloading(
+                                bytesRead = cumulativeDone.coerceAtMost(totalNow),
+                                totalBytes = totalNow,
+                                currentFileName = fileSpec.name,
+                            )
+                            )
                     }
+                    enqueueEmbeddingIfDeclared(fileSpec, finalFile, pendingSpecs, knownFileSizes)
                 }
 
                 _downloadStates.update {
                     it + (model.id to ModelDownloadState.Completed(targetDir.absolutePath, lastDigestHex))
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 val current = _downloadStates.value[model.id]
                 if (current !is ModelDownloadState.Paused) {
@@ -333,6 +250,128 @@ class ModelDownloadManager internal constructor(
             }
         }
         activeJobs[model.id] = job
+    }
+
+    private suspend fun downloadFileWithMirrors(
+        modelId: String,
+        fileSpec: ModelFileDto,
+        candidateUrls: List<String>,
+        targetDir: File,
+        finalFile: File,
+        cumulativeDoneBeforeFile: Long,
+        knownFileSizes: MutableMap<String, Long>,
+        totalKnownBytes: () -> Long,
+        onPaused: (Long) -> Unit,
+    ): String? {
+        var lastError: Exception? = null
+        val partFile = File(targetDir, "${fileSpec.name}.part")
+
+        for (downloadUrl in candidateUrls) {
+            var existingBytes = if (partFile.exists()) partFile.length() else 0L
+            var forceFresh = false
+            try {
+                while (true) {
+                    val requestBuilder = Request.Builder().url(downloadUrl)
+                    if (existingBytes > 0L && !forceFresh) {
+                        requestBuilder.header("Range", "bytes=$existingBytes-")
+                    }
+
+                    val call = okHttpClient.newCall(requestBuilder.build())
+                    activeCalls[modelId] = call
+
+                    var retryFresh = false
+                    var completedDigest: String? = null
+                    call.execute().use { response ->
+                        if (response.code == 416 && existingBytes > 0L) {
+                            val rangeTotal = parseContentRangeTotal(response)
+                            if (rangeTotal != null && existingBytes == rangeTotal) {
+                                knownFileSizes[fileSpec.name] = rangeTotal
+                                completedDigest = finalizeCompletedPart(partFile, finalFile, fileSpec).orEmpty()
+                                return@use
+                            }
+                            partFile.delete()
+                            existingBytes = 0L
+                            forceFresh = true
+                            retryFresh = true
+                            return@use
+                        }
+
+                        if (!response.isSuccessful && response.code != 206) {
+                            throw IOException("HTTP ${response.code} downloading ${fileSpec.name}")
+                        }
+
+                        val appendMode = response.code == 206 && existingBytes > 0L
+                        val body = response.body ?: throw IOException("Empty body for ${fileSpec.name}")
+                        val expectedFileBytes = resolveExpectedFileBytes(
+                            response = response,
+                            appendMode = appendMode,
+                            existingBytes = existingBytes,
+                            bodyContentLength = body.contentLength(),
+                        )
+                        if (expectedFileBytes != null && expectedFileBytes > 0L) {
+                            knownFileSizes[fileSpec.name] = expectedFileBytes
+                        }
+
+                        val buffer = ByteArray(16 * 1024)
+                        var fileWritten = if (appendMode) existingBytes else 0L
+                        var lastEmittedBytes = -1L
+
+                        RandomAccessFile(partFile, "rw").use { raf ->
+                            if (appendMode) {
+                                raf.seek(existingBytes)
+                            } else {
+                                raf.setLength(0L)
+                            }
+                            body.byteStream().use { input ->
+                                while (kotlin.coroutines.coroutineContext.isActive) {
+                                    val read = input.read(buffer)
+                                    if (read == -1) break
+                                    raf.write(buffer, 0, read)
+                                    fileWritten += read
+                                    if (lastEmittedBytes < 0L || fileWritten - lastEmittedBytes >= 64 * 1024) {
+                                        lastEmittedBytes = fileWritten
+                                        val totalNow = totalKnownBytes()
+                                        _downloadStates.update {
+                                            it + (
+                                                modelId to ModelDownloadState.Downloading(
+                                                    bytesRead = (cumulativeDoneBeforeFile + fileWritten).coerceAtMost(totalNow),
+                                                    totalBytes = totalNow,
+                                                    currentFileName = fileSpec.name,
+                                                )
+                                                )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        if (!kotlin.coroutines.coroutineContext.isActive) {
+                            onPaused(fileWritten)
+                            return null
+                        }
+
+                        if (expectedFileBytes != null && expectedFileBytes > 0L && fileWritten != expectedFileBytes) {
+                            throw IOException("文件 ${fileSpec.name} 下载未完整 ($fileWritten/$expectedFileBytes)")
+                        }
+
+                        completedDigest = finalizeCompletedPart(partFile, finalFile, fileSpec).orEmpty()
+                    }
+
+                    if (completedDigest != null) {
+                        return completedDigest
+                    }
+                    if (!retryFresh) break
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (_downloadStates.value[modelId] is ModelDownloadState.Paused) {
+                    return null
+                }
+                lastError = e
+            }
+        }
+        throw lastError ?: IOException("下载失败：${fileSpec.name}")
     }
 
     fun pause(modelId: String) {
@@ -377,12 +416,14 @@ class ModelDownloadManager internal constructor(
         val embedFile = parseEmbeddingFileName(finalFile) ?: return
         if (pendingSpecs.any { it.name == embedFile }) return
         val baseUrl = fileSpec.url.substringBeforeLast('/')
+        val fallbackBaseUrl = fileSpec.fallbackUrl?.substringBeforeLast('/')
         pendingSpecs.add(
             ModelFileDto(
                 name = embedFile,
                 url = "$baseUrl/$embedFile",
                 sizeBytes = 1L,
                 sha256 = null,
+                fallbackUrl = fallbackBaseUrl?.let { "$it/$embedFile" },
             ),
         )
         knownFileSizes[embedFile] = 1L
@@ -429,24 +470,66 @@ class ModelDownloadManager internal constructor(
     }
 
     companion object {
+        private const val MODELSCOPE_BASE =
+            "https://modelscope.cn/models/MNN/Qwen2.5-0.5B-Instruct-MNN/resolve/master"
+        private const val HUGGINGFACE_BASE =
+            "https://huggingface.co/taobao-mnn/Qwen2.5-0.5B-Instruct-MNN/resolve/main"
+
         fun builtInCatalog(): List<ModelDescriptorDto> = listOf(
             ModelDescriptorDto(
                 id = "qwen2.5-0.5b-instruct-mnn",
-                name = "Qwen2.5-0.5B Instruct (MNN INT4)",
+                name = "Qwen2.5-0.5B Instruct",
                 role = "generation",
                 quantization = "INT4",
-                sizeBytes = 398_458_880L,
+                sizeBytes = 542_845_540L,
                 minRamMb = 2048,
-                downloadUrl = "https://huggingface.co/taobao-mnn/Qwen2.5-0.5B-Instruct-MNN/resolve/main/llm.mnn.weight",
-                mirrorUrl = "https://modelscope.cn/models/MNN/Qwen2.5-0.5B-Instruct-MNN/resolve/master/llm.mnn.weight",
-                sha256 = null,
-                description = "端侧离线推理核心模型，支持流式结构化摘要、日程提议与 2D 关系脉络抽取。",
+                downloadUrl = "$MODELSCOPE_BASE/llm.mnn.weight",
+                mirrorUrl = "$HUGGINGFACE_BASE/llm.mnn.weight",
+                sha256 = "8a31f5a708797bf5bcaac009dc8a6a7b724ec2cabe93fe4687833d255cf443d5",
+                description = null,
                 files = listOf(
-                    ModelFileDto("config.json", "https://modelscope.cn/models/MNN/Qwen2.5-0.5B-Instruct-MNN/resolve/master/config.json", 624L, null),
-                    ModelFileDto("llm_config.json", "https://modelscope.cn/models/MNN/Qwen2.5-0.5B-Instruct-MNN/resolve/master/llm_config.json", 780L, null),
-                    ModelFileDto("tokenizer.txt", "https://modelscope.cn/models/MNN/Qwen2.5-0.5B-Instruct-MNN/resolve/master/tokenizer.txt", 2_450_000L, null),
-                    ModelFileDto("llm.mnn", "https://modelscope.cn/models/MNN/Qwen2.5-0.5B-Instruct-MNN/resolve/master/llm.mnn", 4_200_000L, null),
-                    ModelFileDto("llm.mnn.weight", "https://modelscope.cn/models/MNN/Qwen2.5-0.5B-Instruct-MNN/resolve/master/llm.mnn.weight", 391_807_476L, null),
+                    ModelFileDto(
+                        name = "config.json",
+                        url = "$MODELSCOPE_BASE/config.json",
+                        sizeBytes = 200L,
+                        sha256 = null,
+                        fallbackUrl = "$HUGGINGFACE_BASE/config.json",
+                    ),
+                    ModelFileDto(
+                        name = "llm_config.json",
+                        url = "$MODELSCOPE_BASE/llm_config.json",
+                        sizeBytes = 2_903L,
+                        sha256 = null,
+                        fallbackUrl = "$HUGGINGFACE_BASE/llm_config.json",
+                    ),
+                    ModelFileDto(
+                        name = "tokenizer.mtok",
+                        url = "$MODELSCOPE_BASE/tokenizer.mtok",
+                        sizeBytes = 4_109_683L,
+                        sha256 = "c57d63b4ec886c35ba195879a6a6827b29f6bc48635d49dd256ade69f170ca99",
+                        fallbackUrl = "$HUGGINGFACE_BASE/tokenizer.mtok",
+                    ),
+                    ModelFileDto(
+                        name = "llm.mnn",
+                        url = "$MODELSCOPE_BASE/llm.mnn",
+                        sizeBytes = 681_000L,
+                        sha256 = "40f8f278e67d47d1b76ccef17e77510729bc0df551bdbaca350d4e6f69e8c0ea",
+                        fallbackUrl = "$HUGGINGFACE_BASE/llm.mnn",
+                    ),
+                    ModelFileDto(
+                        name = "embeddings_bf16.bin",
+                        url = "$MODELSCOPE_BASE/embeddings_bf16.bin",
+                        sizeBytes = 272_269_312L,
+                        sha256 = "4e96b0df6d274768cbb7e72404011853d23349999b658dc2f4dfb3c431ea223f",
+                        fallbackUrl = "$HUGGINGFACE_BASE/embeddings_bf16.bin",
+                    ),
+                    ModelFileDto(
+                        name = "llm.mnn.weight",
+                        url = "$MODELSCOPE_BASE/llm.mnn.weight",
+                        sizeBytes = 262_882_442L,
+                        sha256 = "8a31f5a708797bf5bcaac009dc8a6a7b724ec2cabe93fe4687833d255cf443d5",
+                        fallbackUrl = "$HUGGINGFACE_BASE/llm.mnn.weight",
+                    ),
                 ),
             ),
         )

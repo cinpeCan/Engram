@@ -129,7 +129,7 @@ class UnifiedInferenceRouterTest {
         assertFalse(unavailableEdge.generateCalled)
         val fallbackCompleted = fallbackEvents.filterIsInstance<DistillationEvent.Completed>().single()
         assertEquals(AnalysisSource.LOCAL_RULE_FALLBACK, fallbackCompleted.source)
-        assertEquals("本地规则兜底", fallbackCompleted.telemetryBadge)
+        assertEquals("", fallbackCompleted.telemetryBadge)
     }
 
     @Test
@@ -137,8 +137,8 @@ class UnifiedInferenceRouterTest {
         val payloadJson = """{"summary":"明日评审补充条款。","tags":["日程跟进"],"calendarProposal":null,"relations":[]}"""
         val escaped = payloadJson.replace("\"", "\\\"")
         val sseStream = buildString {
-            append("""data: {"delta":"$escaped","done":false,"model":"gpt-4o-mini","latencyMs":12}""").append("\n\n")
-            append("""data: {"delta":"","done":true,"model":"gpt-4o-mini","latencyMs":48}""").append("\n\n")
+            append("""data: {"delta":"$escaped","done":false,"model":"qwen-turbo","latencyMs":12}""").append("\n\n")
+            append("""data: {"delta":"","done":true,"model":"qwen-turbo","latencyMs":48}""").append("\n\n")
             append("data: [DONE]\n\n")
         }
 
@@ -171,6 +171,6 @@ class UnifiedInferenceRouterTest {
 
         val degradedCompleted = degradedEvents.filterIsInstance<DistillationEvent.Completed>().single()
         assertEquals(AnalysisSource.LOCAL_RULE_FALLBACK, degradedCompleted.source)
-        assertEquals("云端未连接 · 本地规则兜底", degradedCompleted.telemetryBadge)
+        assertEquals("云端未连接 · 已用本地提炼", degradedCompleted.telemetryBadge)
     }
 }

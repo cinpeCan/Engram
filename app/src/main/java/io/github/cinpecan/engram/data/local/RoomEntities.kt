@@ -31,6 +31,8 @@ data class MemoryEntity(
     val analysisSource: String = "LOCAL_RULE_FALLBACK",
     @ColumnInfo(name = "telemetry_badge")
     val telemetryBadge: String = "",
+    @ColumnInfo(name = "updated_at", defaultValue = "0")
+    val updatedAtMillis: Long = createdAtMillis,
 )
 
 @Entity(

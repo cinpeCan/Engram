@@ -63,6 +63,7 @@ data class MemoryItem(
     val relations: List<RelationTriple>,
     val analysisSource: AnalysisSource = AnalysisSource.LOCAL_RULE_FALLBACK,
     val telemetryBadge: String = "",
+    val updatedAtMillis: Long = createdAtMillis,
 )
 
 enum class InferenceMode {

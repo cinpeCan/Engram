@@ -5,6 +5,7 @@ import io.github.cinpecan.engram.data.local.LocalMemoryStore
 import io.github.cinpecan.engram.data.local.RoomMemoryStore
 import io.github.cinpecan.engram.data.preferences.EnginePreferencesRepository
 import io.github.cinpecan.engram.data.remote.CloudSseClient
+import io.github.cinpecan.engram.data.remote.MemorySyncClient
 import io.github.cinpecan.engram.data.remote.ModelDownloadManager
 import io.github.cinpecan.engram.data.repository.MemoryRepository
 import io.github.cinpecan.engram.data.repository.UnifiedInferenceRouter
@@ -57,6 +58,7 @@ val dataModule = module {
     single { EnginePreferencesRepository(androidContext()) }
     single { MemoryAnalyzer(json = get()) }
     single { CloudSseClient(okHttpClient = get(), json = get()) }
+    single { MemorySyncClient(okHttpClient = get(), json = get()) }
     single {
         UnifiedInferenceRouter(
             edgeEngine = get(),
@@ -69,6 +71,7 @@ val dataModule = module {
             store = get(),
             inferenceRouter = get(),
             preferencesRepository = get(),
+            syncClient = get(),
         )
     }
     single {
