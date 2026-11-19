@@ -80,4 +80,16 @@ interface MemoryDao {
 
     @Query("SELECT COUNT(*) FROM memories")
     suspend fun countMemories(): Int
+
+    @Query("DELETE FROM memories WHERE id = :memoryId")
+    suspend fun deleteMemoryById(memoryId: String)
+
+    @Upsert
+    suspend fun upsertDeletedTombstone(entity: DeletedMemoryEntity)
+
+    @Query("DELETE FROM deleted_memories WHERE id = :memoryId")
+    suspend fun clearDeletedTombstone(memoryId: String)
+
+    @Query("SELECT * FROM deleted_memories")
+    suspend fun getAllDeletedTombstones(): List<DeletedMemoryEntity>
 }

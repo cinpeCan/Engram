@@ -1,5 +1,7 @@
 package io.github.cinpecan.engram.ui.engine
 
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -11,23 +13,28 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AirplanemodeActive
 import androidx.compose.material.icons.rounded.CleaningServices
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.CloudDownload
 import androidx.compose.material.icons.rounded.CloudQueue
+import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.Memory
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Sync
+import androidx.compose.material.icons.rounded.Visibility
+import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SegmentedButton
@@ -44,12 +51,23 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import io.github.cinpecan.engram.data.remote.DefaultCloudEndpointProvider
 import io.github.cinpecan.engram.data.remote.ModelDownloadState
+import io.github.cinpecan.engram.data.repository.CloudSessionState
 import io.github.cinpecan.engram.domain.model.InferenceMode
 import io.github.cinpecan.engram.edgemnn.EngineState
 import io.github.cinpecan.engram.ui.components.ExpressivePillSurface
@@ -71,6 +89,7 @@ fun EngineBottomSheetRoute(
     val serverUrlInput by viewModel.serverUrlInput.collectAsStateWithLifecycle()
     val syncKeyInput by viewModel.syncKeyInput.collectAsStateWithLifecycle()
     val isSyncing by viewModel.isSyncing.collectAsStateWithLifecycle()
+    val cloudSessionState by viewModel.cloudSessionState.collectAsStateWithLifecycle()
     val catalogItems by viewModel.catalogItems.collectAsStateWithLifecycle()
     var latestNotice by remember { mutableStateOf<String?>(null) }
 
@@ -88,8 +107,10 @@ fun EngineBottomSheetRoute(
         serverUrlInput = serverUrlInput,
         syncKeyInput = syncKeyInput,
         isSyncing = isSyncing,
+        cloudSessionState = cloudSessionState,
         catalogItems = catalogItems,
         latestNotice = latestNotice,
+        hasBundledDefaultEndpoint = DefaultCloudEndpointProvider.hasBundledDefaultEndpoint,
         onIntent = viewModel::onIntent,
         modifier = modifier,
     )
@@ -106,10 +127,20 @@ fun EngineBottomSheetContent(
     latestNotice: String?,
     onIntent: (EngineIntent) -> Unit,
     modifier: Modifier = Modifier,
+    cloudSessionState: CloudSessionState = CloudSessionState.IdleUnconfigured,
+    hasBundledDefaultEndpoint: Boolean = DefaultCloudEndpointProvider.hasBundledDefaultEndpoint,
 ) {
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
     Column(
         modifier = modifier
             .fillMaxWidth()
+            .pointerInput(Unit) {
+                detectTapGestures {
+                    focusManager.clearFocus()
+                    keyboardController?.hide()
+                }
+            }
             .verticalScroll(rememberScrollState())
             .navigationBarsPadding()
             .imePadding()
@@ -186,11 +217,17 @@ fun EngineBottomSheetContent(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
 
-            SheetTextField(
+            GatewayEndpointField(
                 value = serverUrlInput,
+                hasBundledDefaultEndpoint = hasBundledDefaultEndpoint,
                 onValueChange = { onIntent(EngineIntent.UpdateServerUrlInput(it)) },
-                placeholder = "服务器地址（如 http://192.168.1.10:8787）",
                 modifier = Modifier.fillMaxWidth(),
+            )
+
+            Text(
+                text = "同步码 / 云端体验码",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
 
             Row(
@@ -198,59 +235,75 @@ fun EngineBottomSheetContent(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                SheetTextField(
+                MaskedSyncKeyField(
                     value = syncKeyInput,
                     onValueChange = { onIntent(EngineIntent.UpdateSyncKeyInput(it)) },
-                    placeholder = "同步码（如 engram-demo）",
                     modifier = Modifier.weight(1f),
                 )
 
+                val isSpinning = isSyncing || cloudSessionState is CloudSessionState.Verifying
+                val canSync = cloudSessionState is CloudSessionState.Ready && !isSpinning
+
                 ExpressivePillSurface(
                     onClick = { onIntent(EngineIntent.SyncMemories) },
-                    enabled = !isSyncing,
-                    restCorner = 18.dp,
-                    pressedCorner = 10.dp,
-                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                    enabled = canSync,
+                    modifier = Modifier.size(42.dp),
+                    restCorner = 21.dp,
+                    pressedCorner = 12.dp,
+                    containerColor = if (canSync) {
+                        MaterialTheme.colorScheme.primaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+                    },
                     pressedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.28f),
-                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                    contentColor = if (canSync) {
+                        MaterialTheme.colorScheme.onPrimaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+                    },
+                    contentDescription = "同步记忆",
                 ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        if (isSyncing) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(15.dp),
-                                strokeWidth = 2.dp,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer,
-                            )
-                        } else {
-                            Icon(
-                                imageVector = Icons.Rounded.Sync,
-                                contentDescription = null,
-                                modifier = Modifier.size(16.dp),
-                            )
-                        }
-                        Text(
-                            text = if (isSyncing) "同步中" else "同步",
-                            style = MaterialTheme.typography.labelLarge,
+                    if (isSpinning) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.Rounded.Sync,
+                            contentDescription = "同步",
+                            modifier = Modifier.size(19.dp),
                         )
                     }
                 }
             }
 
-            val displayNotice = latestNotice ?: (runtimeStatus.engineState as? EngineState.Error)?.message
-            if (!displayNotice.isNullOrBlank()) {
+            val statusBanner = resolveStatusBanner(
+                syncKeyInput = syncKeyInput,
+                cloudSessionState = cloudSessionState,
+                latestNotice = latestNotice,
+                engineError = (runtimeStatus.engineState as? EngineState.Error)?.message,
+            )
+            if (statusBanner != null) {
+                val canRetry = cloudSessionState is CloudSessionState.Unreachable
                 Surface(
                     shape = RoundedCornerShape(10.dp),
-                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
-                    modifier = Modifier.fillMaxWidth(),
+                    color = statusBanner.containerColor,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .then(
+                            if (canRetry) {
+                                Modifier.clickable { onIntent(EngineIntent.RetryCloudVerification) }
+                            } else {
+                                Modifier
+                            },
+                        ),
                 ) {
                     Text(
-                        text = displayNotice,
+                        text = statusBanner.text,
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = statusBanner.textColor,
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                     )
                 }
@@ -258,6 +311,246 @@ fun EngineBottomSheetContent(
         }
 
         Spacer(modifier = Modifier.height(8.dp))
+    }
+}
+
+private data class StatusBanner(
+    val text: String,
+    val containerColor: Color,
+    val textColor: Color,
+)
+
+@Composable
+private fun resolveStatusBanner(
+    syncKeyInput: String,
+    cloudSessionState: CloudSessionState,
+    latestNotice: String?,
+    engineError: String?,
+): StatusBanner? {
+    val neutralBg = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+    val neutralFg = MaterialTheme.colorScheme.onSurfaceVariant
+    val readyBg = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
+    val readyFg = MaterialTheme.colorScheme.onPrimaryContainer
+    val errorBg = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.55f)
+    val errorFg = MaterialTheme.colorScheme.onErrorContainer
+
+    return when (cloudSessionState) {
+        CloudSessionState.Verifying -> StatusBanner("正在校验体验码…", neutralBg, neutralFg)
+        CloudSessionState.InvalidToken -> StatusBanner("体验码无效或已过期", errorBg, errorFg)
+        CloudSessionState.QuotaExhausted -> StatusBanner("云端体验额度已满", errorBg, errorFg)
+        CloudSessionState.Unreachable -> StatusBanner("暂未连上云端网关 · 点此重试", errorBg, errorFg)
+        is CloudSessionState.Ready -> when {
+            !latestNotice.isNullOrBlank() -> StatusBanner(latestNotice, readyBg, readyFg)
+            cloudSessionState.remainingQuota != null -> StatusBanner(
+                "云端就绪 · 剩余 ${cloudSessionState.remainingQuota} 次提炼",
+                readyBg,
+                readyFg,
+            )
+            else -> StatusBanner("云端就绪", readyBg, readyFg)
+        }
+        CloudSessionState.IdleUnconfigured -> when {
+            !latestNotice.isNullOrBlank() -> StatusBanner(latestNotice, neutralBg, neutralFg)
+            syncKeyInput.trim().isNotEmpty() -> StatusBanner("请继续输入完整体验码", neutralBg, neutralFg)
+            !engineError.isNullOrBlank() -> StatusBanner(engineError, errorBg, errorFg)
+            else -> null
+        }
+    }
+}
+
+@Composable
+private fun GatewayEndpointField(
+    value: String,
+    hasBundledDefaultEndpoint: Boolean,
+    onValueChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var isFocused by remember { mutableStateOf(false) }
+    val showMaskedPreset = hasBundledDefaultEndpoint && value.isEmpty() && !isFocused
+    val textStyle = MaterialTheme.typography.bodyMedium.copy(
+        color = MaterialTheme.colorScheme.onSurface,
+    )
+
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 14.dp, end = if (value.isNotEmpty()) 4.dp else 14.dp, top = 4.dp, bottom = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            BasicTextField(
+                value = value,
+                onValueChange = onValueChange,
+                singleLine = true,
+                textStyle = textStyle,
+                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Uri,
+                    autoCorrectEnabled = false,
+                    imeAction = ImeAction.Next,
+                ),
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(vertical = 8.dp)
+                    .onFocusChanged { isFocused = it.isFocused },
+                decorationBox = { innerTextField ->
+                    Box(contentAlignment = Alignment.CenterStart) {
+                        if (showMaskedPreset) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Lock,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.8f),
+                                    modifier = Modifier.size(15.dp),
+                                )
+                                Text(
+                                    text = "https://••••••••••••",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.72f),
+                                ) {
+                                    Text(
+                                        text = "默认已就绪",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
+                                    )
+                                }
+                            }
+                        } else if (value.isEmpty()) {
+                            Text(
+                                text = if (hasBundledDefaultEndpoint) {
+                                    "自定义地址（可选）"
+                                } else {
+                                    "服务器地址（如 http://127.0.0.1:8787）"
+                                },
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        innerTextField()
+                    }
+                },
+            )
+
+            if (value.isNotEmpty()) {
+                IconButton(
+                    onClick = { onValueChange("") },
+                    modifier = Modifier.size(32.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Close,
+                        contentDescription = "清除地址",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MaskedSyncKeyField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var revealSecret by remember { mutableStateOf(false) }
+    val textStyle = MaterialTheme.typography.bodyMedium.copy(
+        color = MaterialTheme.colorScheme.onSurface,
+    )
+
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 14.dp, end = if (value.isNotEmpty()) 4.dp else 14.dp, top = 4.dp, bottom = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            BasicTextField(
+                value = value,
+                onValueChange = onValueChange,
+                singleLine = true,
+                textStyle = textStyle,
+                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                visualTransformation = if (revealSecret) {
+                    VisualTransformation.None
+                } else {
+                    PasswordVisualTransformation()
+                },
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Password,
+                    autoCorrectEnabled = false,
+                    imeAction = ImeAction.Done,
+                ),
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(vertical = 8.dp),
+                decorationBox = { innerTextField ->
+                    Box(contentAlignment = Alignment.CenterStart) {
+                        if (value.isEmpty()) {
+                            Text(
+                                text = "同步码 / 云端体验码",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        innerTextField()
+                    }
+                },
+            )
+
+            if (value.isNotEmpty()) {
+                IconButton(
+                    onClick = { revealSecret = !revealSecret },
+                    modifier = Modifier.size(30.dp),
+                ) {
+                    Icon(
+                        imageVector = if (revealSecret) {
+                            Icons.Rounded.VisibilityOff
+                        } else {
+                            Icons.Rounded.Visibility
+                        },
+                        contentDescription = if (revealSecret) "隐藏体验码" else "显示体验码",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(17.dp),
+                    )
+                }
+                IconButton(
+                    onClick = { onValueChange("") },
+                    modifier = Modifier.size(30.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Close,
+                        contentDescription = "清除体验码",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -450,48 +743,6 @@ private fun FramelessModelRow(
                     .clip(RoundedCornerShape(2.dp)),
             )
         }
-    }
-}
-
-@Composable
-private fun SheetTextField(
-    value: String,
-    onValueChange: (String) -> Unit,
-    placeholder: String,
-    modifier: Modifier = Modifier,
-) {
-    val textStyle = MaterialTheme.typography.bodyMedium.copy(
-        color = MaterialTheme.colorScheme.onSurface,
-    )
-    Surface(
-        modifier = modifier,
-        shape = RoundedCornerShape(14.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-    ) {
-        BasicTextField(
-            value = value,
-            onValueChange = onValueChange,
-            singleLine = true,
-            textStyle = textStyle,
-            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 11.dp),
-            decorationBox = { innerTextField ->
-                Box(contentAlignment = Alignment.CenterStart) {
-                    if (value.isEmpty()) {
-                        Text(
-                            text = placeholder,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                    innerTextField()
-                }
-            },
-        )
     }
 }
 

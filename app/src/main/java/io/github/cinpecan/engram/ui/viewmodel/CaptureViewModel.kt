@@ -33,12 +33,16 @@ sealed interface CaptureIntent {
         val openedExisting: Boolean,
         val hasReadPermission: Boolean,
     ) : CaptureIntent
+
+    data class DeleteMemory(val memory: MemoryItem) : CaptureIntent
+    data object UndoDeleteMemory : CaptureIntent
 }
 
 sealed interface CaptureEffect {
     data class OpenCalendarInsert(val memoryId: String, val proposal: CalendarProposal) : CaptureEffect
     data class OpenCalendarEvent(val eventId: Long, val proposal: CalendarProposal) : CaptureEffect
     data class ShowMessage(val message: String) : CaptureEffect
+    data class ShowUndoDelete(val message: String) : CaptureEffect
 }
 
 class CaptureViewModel(
@@ -63,6 +67,8 @@ class CaptureViewModel(
 
     private val effectChannel = Channel<CaptureEffect>(Channel.BUFFERED)
     val effects: Flow<CaptureEffect> = effectChannel.receiveAsFlow()
+
+    private var lastDeletedMemory: MemoryItem? = null
 
     fun onIntent(intent: CaptureIntent) {
         when (intent) {
@@ -90,6 +96,24 @@ class CaptureViewModel(
                 memoryRepository.notifyCalendarPermissionChanged()
             }
             is CaptureIntent.OnCalendarActionLaunched -> handleCalendarActionLaunched(intent)
+            is CaptureIntent.DeleteMemory -> deleteMemory(intent.memory)
+            CaptureIntent.UndoDeleteMemory -> undoDeleteMemory()
+        }
+    }
+
+    private fun deleteMemory(memory: MemoryItem) {
+        lastDeletedMemory = memory
+        viewModelScope.launch {
+            memoryRepository.deleteMemory(memory.id)
+            effectChannel.send(CaptureEffect.ShowUndoDelete("已删除印迹"))
+        }
+    }
+
+    private fun undoDeleteMemory() {
+        val toRestore = lastDeletedMemory ?: return
+        lastDeletedMemory = null
+        viewModelScope.launch {
+            memoryRepository.restoreMemory(toRestore)
         }
     }
 

@@ -46,11 +46,14 @@ import androidx.compose.material.icons.outlined.Hub
 import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.CalendarMonth
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.EventAvailable
 import androidx.compose.material.icons.rounded.Hub
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -78,8 +81,12 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.cinpecan.engram.domain.agent.CalendarToolExecutor
@@ -181,6 +188,11 @@ fun CaptureRoute(
                     )
                 }
                 is CaptureEffect.ShowMessage -> navigator.showMessage(effect.message)
+                is CaptureEffect.ShowUndoDelete -> navigator.showActionMessage(
+                    message = effect.message,
+                    actionLabel = "撤销",
+                    onAction = { viewModel.onIntent(CaptureIntent.UndoDeleteMemory) },
+                )
             }
         }
     }
@@ -193,6 +205,7 @@ fun CaptureRoute(
         onIntent = viewModel::onIntent,
         onOpenGraph = navigator::openGraphForMemory,
         onOpenRawMemory = navigator::openRawMemory,
+        onConsoleClearanceChanged = { navigator.bottomConsoleClearanceDp = it },
         modifier = modifier,
     )
 }
@@ -208,10 +221,12 @@ fun CaptureScreen(
     onOpenGraph: (String) -> Unit,
     onOpenRawMemory: (String) -> Unit,
     modifier: Modifier = Modifier,
+    onConsoleClearanceChanged: (Dp) -> Unit = {},
 ) {
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
     var isInputFocused by remember { mutableStateOf(false) }
+    var activeDeleteBubbleMemoryId by remember { mutableStateOf<String?>(null) }
     val isImeVisible = WindowInsets.isImeVisible
 
     val dismissKeyboard: () -> Unit = {
@@ -226,11 +241,13 @@ fun CaptureScreen(
     CollapsibleBottomConsoleLayout(
         lockExpanded = lockConsoleExpanded,
         onUserScroll = {
+            activeDeleteBubbleMemoryId = null
             if (isInputFocused || isImeVisible) {
                 dismissKeyboard()
             }
         },
         extraBottomListPadding = 8.dp,
+        onClearanceChanged = onConsoleClearanceChanged,
         modifier = modifier,
         listContent = { bottomContentPadding ->
             LazyColumn(
@@ -238,7 +255,10 @@ fun CaptureScreen(
                     .fillMaxSize()
                     .pointerInput(isInputFocused, isImeVisible) {
                         if (isInputFocused || isImeVisible) {
-                            detectTapGestures { dismissKeyboard() }
+                            detectTapGestures {
+                                activeDeleteBubbleMemoryId = null
+                                dismissKeyboard()
+                            }
                         }
                     },
                 contentPadding = PaddingValues(
@@ -254,7 +274,23 @@ fun CaptureScreen(
                         memory = memory,
                         streamingPreview = streamingPreviews[memory.id],
                         isKeyboardActive = isInputFocused || isImeVisible,
+                        isDeleteBubbleVisible = activeDeleteBubbleMemoryId == memory.id,
                         onDismissKeyboard = dismissKeyboard,
+                        onLongPress = {
+                            if (isInputFocused || isImeVisible) {
+                                dismissKeyboard()
+                            }
+                            activeDeleteBubbleMemoryId = memory.id
+                        },
+                        onDismissDeleteBubble = {
+                            if (activeDeleteBubbleMemoryId == memory.id) {
+                                activeDeleteBubbleMemoryId = null
+                            }
+                        },
+                        onDeleteMemory = {
+                            activeDeleteBubbleMemoryId = null
+                            onIntent(CaptureIntent.DeleteMemory(memory))
+                        },
                         onOpenGraph = { onOpenGraph(memory.id) },
                         onOpenRawMemory = { onOpenRawMemory(memory.id) },
                         onAddCalendar = { proposal ->
@@ -392,9 +428,12 @@ private fun UnifiedCaptureComposer(
     )
 
     val canSubmit = inputText.isNotBlank() && !isSubmitting
+    val hasInput = inputText.isNotEmpty()
 
     BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-        val reservedSingleLineHorizontalPx = with(density) { 66.dp.roundToPx() }
+        val reservedSingleLineHorizontalPx = with(density) {
+            (if (hasInput) 98.dp else 66.dp).roundToPx()
+        }
         val singleLineAvailPx = (constraints.maxWidth - reservedSingleLineHorizontalPx).coerceAtLeast(1)
         val measured = remember(inputText, singleLineAvailPx, textStyle) {
             if (inputText.isEmpty()) {
@@ -439,7 +478,11 @@ private fun UnifiedCaptureComposer(
                         .padding(
                             start = 16.dp,
                             top = 12.dp,
-                            end = if (isMultiline) 16.dp else 50.dp,
+                            end = when {
+                                isMultiline -> 16.dp
+                                hasInput -> 82.dp
+                                else -> 50.dp
+                            },
                             bottom = if (isMultiline) 44.dp else 12.dp,
                         ),
                     textStyle = textStyle,
@@ -462,33 +505,52 @@ private fun UnifiedCaptureComposer(
                     },
                 )
 
-                ExpressivePillSurface(
-                    onClick = onSubmit,
-                    enabled = canSubmit,
+                Row(
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
-                        .padding(end = 6.dp, bottom = 6.dp)
-                        .size(36.dp),
-                    restCorner = 18.dp,
-                    pressedCorner = 11.dp,
-                    containerColor = if (canSubmit) {
-                        MaterialTheme.colorScheme.primary
-                    } else {
-                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f)
-                    },
-                    pressedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.85f),
-                    contentColor = if (canSubmit) {
-                        MaterialTheme.colorScheme.onPrimary
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
-                    },
-                    contentDescription = "保存印迹",
+                        .padding(end = 6.dp, bottom = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    Icon(
-                        imageVector = Icons.Rounded.ArrowUpward,
-                        contentDescription = null,
-                        modifier = Modifier.size(20.dp),
-                    )
+                    if (hasInput) {
+                        IconButton(
+                            onClick = { onValueChange("") },
+                            modifier = Modifier.size(30.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Close,
+                                contentDescription = "清除输入",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
+                                modifier = Modifier.size(16.dp),
+                            )
+                        }
+                    }
+
+                    ExpressivePillSurface(
+                        onClick = onSubmit,
+                        enabled = canSubmit,
+                        modifier = Modifier.size(36.dp),
+                        restCorner = 18.dp,
+                        pressedCorner = 11.dp,
+                        containerColor = if (canSubmit) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f)
+                        },
+                        pressedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.85f),
+                        contentColor = if (canSubmit) {
+                            MaterialTheme.colorScheme.onPrimary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
+                        },
+                        contentDescription = "保存印迹",
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.ArrowUpward,
+                            contentDescription = null,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
                 }
             }
         }
@@ -501,7 +563,11 @@ private fun MemoryTimelineCard(
     memory: MemoryItem,
     streamingPreview: StreamingPreviewState?,
     isKeyboardActive: Boolean,
+    isDeleteBubbleVisible: Boolean,
     onDismissKeyboard: () -> Unit,
+    onLongPress: () -> Unit,
+    onDismissDeleteBubble: () -> Unit,
+    onDeleteMemory: () -> Unit,
     onOpenGraph: () -> Unit,
     onOpenRawMemory: () -> Unit,
     onAddCalendar: (CalendarProposal) -> Unit,
@@ -509,6 +575,7 @@ private fun MemoryTimelineCard(
     var expanded by rememberSaveable(memory.id) { mutableStateOf(false) }
     var wasPending by remember(memory.id) { mutableStateOf(memory.analysisStatus == MemoryAnalysisStatus.PENDING) }
     val haptic = LocalHapticFeedback.current
+    val density = LocalDensity.current
 
     LaunchedEffect(memory.analysisStatus) {
         if (wasPending && memory.analysisStatus == MemoryAnalysisStatus.READY) {
@@ -517,57 +584,77 @@ private fun MemoryTimelineCard(
         }
     }
 
-    ExpressiveCardSurface(
-        onClick = {
-            if (isKeyboardActive) {
-                onDismissKeyboard()
-            } else {
-                expanded = !expanded
-            }
-        },
-        modifier = Modifier.fillMaxWidth(),
-        restCorner = 20.dp,
-        pressedCorner = 15.dp,
-        containerColor = MaterialTheme.colorScheme.surface,
-        shadowElevation = 0.5.dp,
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .animateContentSize(
-                    animationSpec = spring(
-                        dampingRatio = 0.8f,
-                        stiffness = 380f,
-                    ),
-                )
-                .padding(horizontal = 14.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+    Box(modifier = Modifier.fillMaxWidth()) {
+        ExpressiveCardSurface(
+            onClick = {
+                if (isDeleteBubbleVisible) {
+                    onDismissDeleteBubble()
+                } else if (isKeyboardActive) {
+                    onDismissKeyboard()
+                } else {
+                    expanded = !expanded
+                }
+            },
+            onLongClick = {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                onLongPress()
+            },
+            modifier = Modifier.fillMaxWidth(),
+            restCorner = 20.dp,
+            pressedCorner = 15.dp,
+            containerColor = MaterialTheme.colorScheme.surface,
+            shadowElevation = 0.5.dp,
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .animateContentSize(
+                        animationSpec = spring(
+                            dampingRatio = 0.8f,
+                            stiffness = 380f,
+                        ),
+                    )
+                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Row(
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Text(
-                        text = formatTimestamp(memory.createdAtMillis),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
-                    )
-                    if (!expanded && memory.tags.isNotEmpty()) {
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
                         Text(
-                            text = memory.tags.take(2).joinToString("  ") { "#$it" },
+                            text = formatTimestamp(memory.createdAtMillis),
                             style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.secondary,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
                         )
+                        if (memory.analysisSource == AnalysisSource.SEED) {
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.85f),
+                            ) {
+                                Text(
+                                    text = "预置",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp),
+                                )
+                            }
+                        }
+                        if (!expanded && memory.tags.isNotEmpty()) {
+                            Text(
+                                text = memory.tags.take(2).joinToString("  ") { "#$it" },
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.secondary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
                     }
-                }
 
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -672,11 +759,13 @@ private fun MemoryTimelineCard(
                             expanded = expanded,
                         )
 
-                        val showTelemetryBadge = memory.telemetryBadge.isNotBlank() && (
-                            memory.analysisSource == AnalysisSource.MNN_EDGE ||
-                                memory.analysisSource == AnalysisSource.CLOUD_SSE ||
-                                memory.telemetryBadge.contains("云端")
-                            )
+                        val showTelemetryBadge = memory.telemetryBadge.isNotBlank() &&
+                            memory.analysisSource != AnalysisSource.SEED && (
+                                memory.analysisSource == AnalysisSource.MNN_EDGE ||
+                                    memory.analysisSource == AnalysisSource.CLOUD_SSE ||
+                                    memory.telemetryBadge.contains("云端") ||
+                                    memory.telemetryBadge.contains("体验码")
+                                )
                         if (showTelemetryBadge) {
                             Surface(
                                 shape = RoundedCornerShape(8.dp),
@@ -780,6 +869,53 @@ private fun MemoryTimelineCard(
                             Text(
                                 text = "原文",
                                 style = MaterialTheme.typography.labelMedium,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        }
+
+        if (isDeleteBubbleVisible) {
+            Popup(
+                alignment = Alignment.TopEnd,
+                offset = IntOffset(0, -with(density) { 8.dp.roundToPx() }),
+                onDismissRequest = onDismissDeleteBubble,
+                properties = PopupProperties(focusable = true),
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    shadowElevation = 6.dp,
+                    border = BorderStroke(
+                        width = 0.75.dp,
+                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f),
+                    ),
+                ) {
+                    ExpressivePillSurface(
+                        onClick = onDeleteMemory,
+                        restCorner = 16.dp,
+                        pressedCorner = 10.dp,
+                        containerColor = Color.Transparent,
+                        pressedContainerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.55f),
+                        contentColor = MaterialTheme.colorScheme.error,
+                        contentDescription = "删除卡片",
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.DeleteOutline,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                            )
+                            Text(
+                                text = "删除",
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.Medium,
                             )
                         }
                     }

@@ -71,3 +71,11 @@ data class MemoryWithRelations(
     )
     val relations: List<MemoryRelationEntity>,
 )
+
+@Entity(tableName = "deleted_memories")
+data class DeletedMemoryEntity(
+    @PrimaryKey
+    val id: String,
+    @ColumnInfo(name = "deleted_at")
+    val deletedAtMillis: Long,
+)

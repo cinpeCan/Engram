@@ -6,9 +6,11 @@ import io.github.cinpecan.engram.data.local.EngramDatabase
 import io.github.cinpecan.engram.data.local.LocalMemoryStore
 import io.github.cinpecan.engram.data.local.RoomMemoryStore
 import io.github.cinpecan.engram.data.preferences.EnginePreferencesRepository
+import io.github.cinpecan.engram.data.remote.CloudAuthClient
 import io.github.cinpecan.engram.data.remote.CloudSseClient
 import io.github.cinpecan.engram.data.remote.MemorySyncClient
 import io.github.cinpecan.engram.data.remote.ModelDownloadManager
+import io.github.cinpecan.engram.data.repository.CloudSessionMonitor
 import io.github.cinpecan.engram.data.repository.MemoryRepository
 import io.github.cinpecan.engram.data.repository.UnifiedInferenceRouter
 import io.github.cinpecan.engram.domain.analyzer.MemoryAnalyzer
@@ -60,8 +62,15 @@ val dataModule = module {
     single { EnginePreferencesRepository(androidContext()) }
     single { MemoryAnalyzer(json = get()) }
     single<SystemCalendarObserver> { AndroidSystemCalendarObserver(androidContext()) }
+    single { CloudAuthClient(okHttpClient = get(), json = get()) }
     single { CloudSseClient(okHttpClient = get(), json = get()) }
     single { MemorySyncClient(okHttpClient = get(), json = get()) }
+    single {
+        CloudSessionMonitor(
+            preferencesRepository = get(),
+            authClient = get(),
+        )
+    }
     single {
         UnifiedInferenceRouter(
             edgeEngine = get(),
@@ -90,7 +99,15 @@ val dataModule = module {
 @OptIn(KoinExperimentalAPI::class)
 val uiModule = module {
     viewModelOf(::CaptureViewModel)
-    viewModelOf(::EngineViewModel)
+    viewModel {
+        EngineViewModel(
+            edgeEngine = get(),
+            downloadManager = get(),
+            preferencesRepository = get(),
+            memoryRepository = get(),
+            cloudSessionMonitor = get(),
+        )
+    }
     viewModel { (memoryId: String) ->
         GraphViewModel(
             memoryId = memoryId,

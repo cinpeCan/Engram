@@ -24,8 +24,9 @@ data class EnginePreferences(
 ) {
     companion object {
         const val DEFAULT_MODEL_ID = "qwen2.5-0.5b-instruct-mnn"
-        const val DEFAULT_SERVER_BASE_URL = "http://127.0.0.1:8787"
-        const val DEFAULT_SYNC_KEY = "engram-demo"
+        const val DEFAULT_SERVER_BASE_URL = ""
+        const val DEFAULT_SYNC_KEY = ""
+        const val PLACEHOLDER_SYNC_KEY = "engram-demo"
     }
 }
 
@@ -63,25 +64,41 @@ class EnginePreferencesRepository internal constructor(
     }
 
     suspend fun setServerBaseUrl(url: String) {
-        val cleaned = url.trim().trimEnd('/').ifEmpty { EnginePreferences.DEFAULT_SERVER_BASE_URL }
+        val cleaned = url.trim().trimEnd('/')
         dataStore.edit { prefs ->
-            prefs[KEY_SERVER_BASE_URL] = cleaned
+            if (cleaned.isEmpty()) {
+                prefs.remove(KEY_SERVER_BASE_URL)
+            } else {
+                prefs[KEY_SERVER_BASE_URL] = cleaned
+            }
         }
     }
 
     suspend fun setSyncKey(syncKey: String) {
-        val cleaned = syncKey.trim().ifEmpty { EnginePreferences.DEFAULT_SYNC_KEY }
+        val cleaned = syncKey.trim()
         dataStore.edit { prefs ->
-            prefs[KEY_SYNC_KEY] = cleaned
+            if (cleaned.isEmpty()) {
+                prefs.remove(KEY_SYNC_KEY)
+            } else {
+                prefs[KEY_SYNC_KEY] = cleaned
+            }
         }
     }
 
     suspend fun updateSyncConfig(serverBaseUrl: String, syncKey: String) {
-        val cleanedUrl = serverBaseUrl.trim().trimEnd('/').ifEmpty { EnginePreferences.DEFAULT_SERVER_BASE_URL }
-        val cleanedKey = syncKey.trim().ifEmpty { EnginePreferences.DEFAULT_SYNC_KEY }
+        val cleanedUrl = serverBaseUrl.trim().trimEnd('/')
+        val cleanedKey = syncKey.trim()
         dataStore.edit { prefs ->
-            prefs[KEY_SERVER_BASE_URL] = cleanedUrl
-            prefs[KEY_SYNC_KEY] = cleanedKey
+            if (cleanedUrl.isEmpty()) {
+                prefs.remove(KEY_SERVER_BASE_URL)
+            } else {
+                prefs[KEY_SERVER_BASE_URL] = cleanedUrl
+            }
+            if (cleanedKey.isEmpty()) {
+                prefs.remove(KEY_SYNC_KEY)
+            } else {
+                prefs[KEY_SYNC_KEY] = cleanedKey
+            }
         }
     }
 

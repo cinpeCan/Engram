@@ -5,8 +5,8 @@
 | Check Suite | Scope | Command |
 | :--- | :--- | :--- |
 | `:packages:edge-mnn` C++/JNI & JVM Tests | `TokenStreamCoalescer` 32ms windowing, `MnnEngineManager` strict validation (rejects missing backend/blank dir), JNI thread serialization & `onTrimMemory` state machine, `arm64-v8a` 16KB-aligned CMake compilation | `./gradlew :packages:edge-mnn:testDebugUnitTest :packages:edge-mnn:assembleDebug` |
-| `:app` Unit Tests & Debug APK | `MemoryAnalyzer` JSON extraction & Deponder invariants, `UnifiedInferenceRouter` honest MNN/SSE/fallback routing, `EngramNavigator`, `CaptureViewModel`, `GraphViewModel`, `EngineViewModel`, Compose + Nav3 APK packaging | `./gradlew testDebugUnitTest assembleDebug` |
-| `server/` FastAPI Contract Tests | `/health`, `/api/v1/memories/sync`, `/api/v1/analyze/stream` HTTP 503 unconfigured & OpenAI SSE conformance against `contracts/*.schema.json` | `server/.venv/bin/pytest server/tests` |
+| `:app` Unit Tests & Debug APK | `MemoryAnalyzer` JSON extraction & Deponder invariants, `DefaultCloudEndpointProvider` AES-GCM decryption, `CloudSessionMonitor` debounced Bearer verification, `SystemCalendarObserver` matching, `UnifiedInferenceRouter`, `MemoryRepository` tombstone sync, `EngramNavigator`, `CaptureViewModel`, `GraphViewModel`, `EngineViewModel`, Compose + Nav3 APK packaging | `./gradlew testDebugUnitTest assembleDebug` |
+| `server/` FastAPI Contract Tests | `/health`, `/healthz`, `/api/v1/auth/status`, `/api/v1/memories/sync`, `/api/v1/memories/delete`, `/api/v1/analyze/stream` (Vertex AI Gemini & OpenAI-compatible SSE, HTTP 401/429/503, HMAC token CLI, tenant isolation & quota refund) against `contracts/*.schema.json` | `server/.venv/bin/pytest server/tests` |
 
 ---
 

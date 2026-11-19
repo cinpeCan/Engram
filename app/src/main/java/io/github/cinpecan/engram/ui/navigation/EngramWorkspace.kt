@@ -25,8 +25,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
@@ -52,6 +54,8 @@ import androidx.navigation3.scene.SinglePaneSceneStrategy
 import androidx.navigation3.ui.NavDisplay
 import io.github.cinpecan.engram.data.preferences.EnginePreferences
 import io.github.cinpecan.engram.data.preferences.EnginePreferencesRepository
+import io.github.cinpecan.engram.data.repository.CloudSessionMonitor
+import io.github.cinpecan.engram.data.repository.CloudSessionState
 import io.github.cinpecan.engram.domain.model.InferenceMode
 import io.github.cinpecan.engram.edgemnn.EdgeAiEngine
 import io.github.cinpecan.engram.edgemnn.EngineState
@@ -71,17 +75,27 @@ fun EngramWorkspace(
     modifier: Modifier = Modifier,
     edgeEngine: EdgeAiEngine = koinInject(),
     preferencesRepository: EnginePreferencesRepository = koinInject(),
+    cloudSessionMonitor: CloudSessionMonitor = koinInject(),
 ) {
     val navigator = rememberEngramNavigator()
     val engineState by edgeEngine.state.collectAsStateWithLifecycle()
+    val cloudSessionState by cloudSessionMonitor.state.collectAsStateWithLifecycle()
     val prefs by preferencesRepository.preferencesFlow.collectAsStateWithLifecycle(
         initialValue = EnginePreferences(),
     )
 
     val snackbarHostState = remember { SnackbarHostState() }
     LaunchedEffect(navigator) {
-        navigator.messages.collect { msg ->
-            snackbarHostState.showSnackbar(msg)
+        navigator.snackbarEvents.collect { event ->
+            snackbarHostState.currentSnackbarData?.dismiss()
+            val result = snackbarHostState.showSnackbar(
+                message = event.message,
+                actionLabel = event.actionLabel,
+                duration = SnackbarDuration.Short,
+            )
+            if (result == SnackbarResult.ActionPerformed) {
+                event.onAction?.invoke()
+            }
         }
     }
 
@@ -107,9 +121,9 @@ fun EngramWorkspace(
             snackbarHost = {
                 SnackbarHost(
                     hostState = snackbarHostState,
-                    modifier = Modifier.windowInsetsPadding(
-                        WindowInsets.ime.union(WindowInsets.navigationBars),
-                    ),
+                    modifier = Modifier
+                        .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))
+                        .padding(bottom = navigator.bottomConsoleClearanceDp + 8.dp),
                 )
             },
             topBar = {
@@ -124,6 +138,7 @@ fun EngramWorkspace(
                         EngineStatusPill(
                             engineState = engineState,
                             inferenceMode = prefs.inferenceMode,
+                            cloudSessionState = cloudSessionState,
                             onClick = { navigator.openOverlay(EngramNavKey.EngineSheet) },
                             modifier = Modifier.padding(end = 12.dp),
                         )
@@ -158,6 +173,7 @@ fun EngramWorkspace(
 private fun EngineStatusPill(
     engineState: EngineState,
     inferenceMode: InferenceMode,
+    cloudSessionState: CloudSessionState,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -165,7 +181,15 @@ private fun EngineStatusPill(
         engineState is EngineState.Loading || engineState is EngineState.Releasing -> Color(0xFFFFA000)
         engineState is EngineState.Generating -> Color(0xFF1E88E5)
         engineState is EngineState.Error -> MaterialTheme.colorScheme.error
-        inferenceMode == InferenceMode.CLOUD_COLLAB -> MaterialTheme.colorScheme.primary
+        inferenceMode == InferenceMode.CLOUD_COLLAB -> when (cloudSessionState) {
+            is CloudSessionState.Ready -> Color(0xFF2E7D32)
+            CloudSessionState.Verifying -> Color(0xFFFFA000)
+            CloudSessionState.IdleUnconfigured,
+            CloudSessionState.InvalidToken,
+            CloudSessionState.QuotaExhausted,
+            CloudSessionState.Unreachable,
+            -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
+        }
         engineState is EngineState.Ready -> Color(0xFF2E7D32)
         else -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
     }
@@ -180,8 +204,14 @@ private fun EngineStatusPill(
         engineState is EngineState.Loading -> "加载模型中…"
         engineState is EngineState.Generating -> "端侧推理中…"
         engineState is EngineState.Releasing -> "释放内存中…"
-        inferenceMode == InferenceMode.CLOUD_COLLAB -> {
-            if (engineState is EngineState.Ready) "云端 · 端侧待命" else "云端协同"
+        inferenceMode == InferenceMode.CLOUD_COLLAB -> when (cloudSessionState) {
+            is CloudSessionState.Ready -> "云端就绪"
+            CloudSessionState.Verifying -> "云端校验中…"
+            CloudSessionState.IdleUnconfigured,
+            CloudSessionState.InvalidToken,
+            CloudSessionState.QuotaExhausted,
+            CloudSessionState.Unreachable,
+            -> "云端离线"
         }
         engineState is EngineState.Ready -> "Qwen 0.5B · 就绪"
         else -> "端侧离线"

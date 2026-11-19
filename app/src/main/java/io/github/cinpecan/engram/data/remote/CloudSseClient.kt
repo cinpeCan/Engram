@@ -23,20 +23,25 @@ class CloudSseClient(
     fun streamAnalyze(
         baseUrl: String,
         requestPayload: AnalysisStreamRequestDto,
+        authToken: String? = null,
     ): Flow<AnalysisStreamChunkDto> = flow {
-        val url = baseUrl.trim().trimEnd('/') + "/api/v1/analyze/stream"
+        val effectiveBaseUrl = DefaultCloudEndpointProvider.resolveEffectiveBaseUrl(baseUrl)
+        val url = "$effectiveBaseUrl/api/v1/analyze/stream"
         val body = json.encodeToString(requestPayload)
             .toRequestBody("application/json; charset=utf-8".toMediaType())
 
-        val request = Request.Builder()
+        val requestBuilder = Request.Builder()
             .url(url)
             .header("Accept", "text/event-stream")
             .post(body)
-            .build()
+        DefaultCloudEndpointProvider.resolveBearerTokenOrNull(authToken)?.let { token ->
+            requestBuilder.header("Authorization", "Bearer $token")
+        }
+        val request = requestBuilder.build()
 
         okHttpClient.newCall(request).execute().use { response ->
             if (!response.isSuccessful) {
-                error("Cloud gateway HTTP ${response.code}")
+                throw CloudGatewayHttpException(response.code)
             }
             val source = response.body?.source() ?: error("Empty SSE body")
             var sawDoneChunk = false

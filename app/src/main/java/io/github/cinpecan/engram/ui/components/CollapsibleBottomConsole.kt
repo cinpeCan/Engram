@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
@@ -188,6 +189,7 @@ fun CollapsibleBottomConsoleLayout(
     modifier: Modifier = Modifier,
     onUserScroll: () -> Unit = {},
     extraBottomListPadding: Dp = 12.dp,
+    onClearanceChanged: (Dp) -> Unit = {},
     listContent: @Composable (bottomContentPadding: Dp) -> Unit,
     consoleContent: @Composable () -> Unit,
 ) {
@@ -201,7 +203,19 @@ fun CollapsibleBottomConsoleLayout(
         }
     }
 
-    val consoleHeightDp = with(LocalDensity.current) { consoleState.consoleHeightPx.toDp() }
+    val density = LocalDensity.current
+    var innerConsoleHeightPx by remember { mutableFloatStateOf(0f) }
+    val visibleClearanceDp = with(density) {
+        (innerConsoleHeightPx - consoleState.offsetPx).coerceAtLeast(0f).toDp()
+    }
+    LaunchedEffect(visibleClearanceDp) {
+        onClearanceChanged(visibleClearanceDp)
+    }
+    DisposableEffect(Unit) {
+        onDispose { onClearanceChanged(0.dp) }
+    }
+
+    val consoleHeightDp = with(density) { consoleState.consoleHeightPx.toDp() }
     val bgColor = MaterialTheme.colorScheme.background
 
     Box(
@@ -230,7 +244,13 @@ fun CollapsibleBottomConsoleLayout(
                 )
                 .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)),
         ) {
-            consoleContent()
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .onSizeChanged { innerConsoleHeightPx = it.height.toFloat() },
+            ) {
+                consoleContent()
+            }
         }
     }
 }

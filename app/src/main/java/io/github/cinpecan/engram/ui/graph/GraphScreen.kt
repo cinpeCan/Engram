@@ -270,11 +270,6 @@ fun GraphScreen(
                                 } else {
                                     "${edge.target}__${edge.source}"
                                 }
-                                val naturalLengthDp = computeAutoNaturalLengthDp(
-                                    source = edge.source,
-                                    target = edge.target,
-                                    relation = edge.relation,
-                                )
                                 key(edgeKey) {
                                     DeponderDefaultRubber(
                                         startId = edge.source,
@@ -285,10 +280,7 @@ fun GraphScreen(
                                         } else {
                                             DeponderArrowMode.END
                                         },
-                                        physics = RubberPhysics(
-                                            elasticity = 5.6f,
-                                            naturalLengthDp = naturalLengthDp,
-                                        ),
+                                        physics = GraphRubberPhysics,
                                         insets = DeponderRubberInsets.Default,
                                         style = DeponderRubberStyle.of(
                                             lineColor = lineColor,
@@ -323,12 +315,7 @@ fun GraphScreen(
                                             .offset { seedOffset }
                                             .deponderPlanet(
                                                 id = node.id,
-                                                physics = PlanetPhysics(
-                                                    mass = 1.65f,
-                                                    repulsionRadiusDp = 148f,
-                                                    elasticity = 4.2f,
-                                                    pinned = false,
-                                                ),
+                                                physics = GraphPlanetPhysics,
                                             )
                                             .deponderDrag(),
                                     )
@@ -450,8 +437,26 @@ internal fun buildGraphRootPhysics(
         wallElasticityBottom = 5.2f,
         minScale = 0.55f,
         maxScale = 1.25f,
-    )
+    ).withUnfold(true)
 }
+
+/**
+ * Content-adaptive spring length (Deponder 0.6.0): rest length follows the measured relation label
+ * width plus breathing room for both entity capsules and arrowheads, clamped to a readable range.
+ */
+internal val GraphRubberPhysics: RubberPhysics = RubberPhysics.auto(
+    contentPaddingDp = 84f,
+    minLengthDp = 132f,
+    maxLengthDp = 188f,
+    elasticity = 6.6f,
+)
+
+internal val GraphPlanetPhysics: PlanetPhysics = PlanetPhysics(
+    mass = 1.65f,
+    repulsionRadiusDp = 148f,
+    elasticity = 4.8f,
+    pinned = false,
+)
 
 internal fun computeAutoGraphScale(
     widthDp: Float,
@@ -466,18 +471,6 @@ internal fun computeAutoGraphScale(
     }
     val viewportFactor = (minOf(widthDp, heightDp) / 360f).coerceIn(0.82f, 1.08f)
     return (baseByCount * viewportFactor).coerceIn(0.60f, 1.02f)
-}
-
-internal fun computeAutoNaturalLengthDp(
-    source: String,
-    target: String,
-    relation: String,
-): Float {
-    val srcHalfDp = 12f + source.length * 5.2f
-    val tgtHalfDp = 12f + target.length * 5.2f
-    val labelWidthDp = 12f + relation.length * 10.5f
-    val arrowAndBreathingDp = 36f
-    return (srcHalfDp + tgtHalfDp + labelWidthDp + arrowAndBreathingDp).coerceIn(132f, 188f)
 }
 
 @Composable

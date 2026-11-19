@@ -36,6 +36,7 @@ class RoomMemoryStore(
     override suspend fun insertRawMemory(item: MemoryItem) {
         withContext(Dispatchers.IO) {
             db.withTransaction {
+                dao.clearDeletedTombstone(item.id)
                 dao.upsertMemory(item.toEntity())
                 replaceRelations(item.id, item.relations)
             }
@@ -88,7 +89,15 @@ class RoomMemoryStore(
         withContext(Dispatchers.IO) {
             var applied = 0
             db.withTransaction {
+                val tombstones = dao.getAllDeletedTombstones().associateBy { it.id }
                 for (remote in remoteItems) {
+                    val tombstone = tombstones[remote.id]
+                    if (tombstone != null) {
+                        if (remote.updatedAtMillis <= tombstone.deletedAtMillis) {
+                            continue
+                        }
+                        dao.clearDeletedTombstone(remote.id)
+                    }
                     val existing = dao.getMemoryEntity(remote.id)
                     val shouldApply = when {
                         existing == null -> true
@@ -113,6 +122,40 @@ class RoomMemoryStore(
             }
             applied
         }
+
+    override suspend fun deleteMemory(memoryId: String, deletedAtMillis: Long) {
+        withContext(Dispatchers.IO) {
+            db.withTransaction {
+                dao.deleteMemoryById(memoryId)
+                dao.upsertDeletedTombstone(
+                    DeletedMemoryEntity(
+                        id = memoryId,
+                        deletedAtMillis = deletedAtMillis,
+                    ),
+                )
+            }
+        }
+    }
+
+    override suspend fun restoreMemory(item: MemoryItem) {
+        withContext(Dispatchers.IO) {
+            db.withTransaction {
+                dao.clearDeletedTombstone(item.id)
+                dao.upsertMemory(item.toEntity())
+                val normalizedRelations = item.relations.mapIndexed { idx, rel ->
+                    rel.copy(
+                        id = rel.id.ifBlank { "${item.id}_r$idx" },
+                        memoryId = item.id,
+                    )
+                }
+                replaceRelations(item.id, normalizedRelations)
+            }
+        }
+    }
+
+    override suspend fun getDeletedTombstones(): Map<String, Long> = withContext(Dispatchers.IO) {
+        dao.getAllDeletedTombstones().associate { it.id to it.deletedAtMillis }
+    }
 
     override suspend fun getAllMemories(): List<MemoryItem> = withContext(Dispatchers.IO) {
         dao.getAllMemories().map { it.toDomain() }

@@ -5,9 +5,12 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import io.github.cinpecan.engram.data.preferences.EnginePreferences
 import io.github.cinpecan.engram.data.preferences.EnginePreferencesRepository
+import io.github.cinpecan.engram.data.remote.CloudGatewayHttpException
 import io.github.cinpecan.engram.data.remote.ModelDescriptorDto
 import io.github.cinpecan.engram.data.remote.ModelDownloadManager
 import io.github.cinpecan.engram.data.remote.ModelDownloadState
+import io.github.cinpecan.engram.data.repository.CloudSessionMonitor
+import io.github.cinpecan.engram.data.repository.CloudSessionState
 import io.github.cinpecan.engram.data.repository.MemoryRepository
 import io.github.cinpecan.engram.domain.model.InferenceMode
 import io.github.cinpecan.engram.edgemnn.EdgeAiEngine
@@ -32,6 +35,7 @@ sealed interface EngineIntent {
     data class SelectMode(val mode: InferenceMode) : EngineIntent
     data class UpdateServerUrlInput(val url: String) : EngineIntent
     data class UpdateSyncKeyInput(val syncKey: String) : EngineIntent
+    data object RetryCloudVerification : EngineIntent
     data object SyncMemories : EngineIntent
     data class ToggleDownload(val model: ModelDescriptorDto) : EngineIntent
     data class LoadModel(val model: ModelDescriptorDto) : EngineIntent
@@ -61,6 +65,7 @@ class EngineViewModel(
     private val downloadManager: ModelDownloadManager,
     private val preferencesRepository: EnginePreferencesRepository,
     private val memoryRepository: MemoryRepository,
+    private val cloudSessionMonitor: CloudSessionMonitor? = null,
 ) : ViewModel() {
 
     private val serverUrlInputFlow = MutableStateFlow(EnginePreferences.DEFAULT_SERVER_BASE_URL)
@@ -71,6 +76,9 @@ class EngineViewModel(
 
     private val isSyncingFlow = MutableStateFlow(false)
     val isSyncing: StateFlow<Boolean> = isSyncingFlow.asStateFlow()
+
+    val cloudSessionState: StateFlow<CloudSessionState> =
+        cloudSessionMonitor?.state ?: MutableStateFlow<CloudSessionState>(CloudSessionState.IdleUnconfigured).asStateFlow()
 
     private var hasUserEditedServerUrl = false
     private var hasUserEditedSyncKey = false
@@ -150,11 +158,20 @@ class EngineViewModel(
             is EngineIntent.UpdateServerUrlInput -> {
                 hasUserEditedServerUrl = true
                 serverUrlInputFlow.value = intent.url
+                cloudSessionMonitor?.onConfigEdited(intent.url, syncKeyInputFlow.value)
+                viewModelScope.launch {
+                    preferencesRepository.setServerBaseUrl(intent.url)
+                }
             }
             is EngineIntent.UpdateSyncKeyInput -> {
                 hasUserEditedSyncKey = true
                 syncKeyInputFlow.value = intent.syncKey
+                cloudSessionMonitor?.onConfigEdited(serverUrlInputFlow.value, intent.syncKey)
+                viewModelScope.launch {
+                    preferencesRepository.setSyncKey(intent.syncKey)
+                }
             }
+            EngineIntent.RetryCloudVerification -> cloudSessionMonitor?.retryVerification()
             EngineIntent.SyncMemories -> syncMemories()
             is EngineIntent.ToggleDownload -> toggleDownload(intent.model)
             is EngineIntent.LoadModel -> loadModel(intent.model)
@@ -164,9 +181,7 @@ class EngineViewModel(
 
     private fun syncMemories() {
         val normalizedUrl = serverUrlInputFlow.value.trim().trimEnd('/')
-            .ifEmpty { EnginePreferences.DEFAULT_SERVER_BASE_URL }
         val normalizedKey = syncKeyInputFlow.value.trim()
-            .ifEmpty { EnginePreferences.DEFAULT_SYNC_KEY }
 
         viewModelScope.launch {
             isSyncingFlow.value = true
@@ -174,14 +189,23 @@ class EngineViewModel(
                 preferencesRepository.updateSyncConfig(normalizedUrl, normalizedKey)
                 serverUrlInputFlow.value = normalizedUrl
                 syncKeyInputFlow.value = normalizedKey
+                cloudSessionMonitor?.onConfigEdited(normalizedUrl, normalizedKey)
 
                 val result = memoryRepository.syncWithServer(normalizedUrl, normalizedKey)
+                cloudSessionMonitor?.retryVerification()
                 val msg = result.fold(
                     onSuccess = { summary ->
                         "同步完成 · 拉取 ${summary.pulledCount} 条更新，云端共 ${summary.totalRemoteCount} 条"
                     },
                     onFailure = { err ->
-                        "已保存配置，暂未连上同步服务（${err.message ?: "请检查地址"}）"
+                        when (err) {
+                            is CloudGatewayHttpException -> when (err.statusCode) {
+                                401 -> "已保存配置 · 需填写有效体验码，或配置自定义服务器地址"
+                                429 -> "已保存配置 · 云端体验额度已达上限"
+                                else -> "已保存配置 · 同步服务返回异常（HTTP ${err.statusCode}）"
+                            }
+                            else -> "已保存配置，暂未连上同步服务，请检查网络或服务器地址"
+                        }
                     },
                 )
                 effectChannel.send(EngineEffect.ShowMessage(msg))

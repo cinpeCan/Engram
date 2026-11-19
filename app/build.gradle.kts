@@ -1,8 +1,46 @@
+import java.io.StringReader
+import java.security.SecureRandom
+import java.util.Properties
+import javax.crypto.Cipher
+import javax.crypto.spec.GCMParameterSpec
+import javax.crypto.spec.SecretKeySpec
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.ksp)
+}
+
+fun ByteArray.toHexString(): String = joinToString("") { "%02x".format(it) }
+
+val localPropertiesText = providers.fileContents(layout.settingsDirectory.file("local.properties")).asText.orNull
+val localPropertiesCloudUrl = localPropertiesText?.let { raw ->
+    Properties().apply { load(StringReader(raw)) }
+        .getProperty("ENGRAM_DEFAULT_CLOUD_BASE_URL")
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
+}
+val defaultCloudBaseUrl = (
+    localPropertiesCloudUrl
+        ?: providers.gradleProperty("ENGRAM_DEFAULT_CLOUD_BASE_URL").orNull?.trim()?.takeIf { it.isNotEmpty() }
+        ?: providers.environmentVariable("ENGRAM_DEFAULT_CLOUD_BASE_URL").orNull?.trim()?.takeIf { it.isNotEmpty() }
+        ?: ""
+    ).trimEnd('/')
+
+val (configSeedAHex, configSeedBHex, configNonceHex, configPayloadHex) = if (defaultCloudBaseUrl.isNotEmpty()) {
+    val rng = SecureRandom()
+    val maskA = ByteArray(32).also { rng.nextBytes(it) }
+    val secretKey = ByteArray(32).also { rng.nextBytes(it) }
+    val maskB = ByteArray(32) { idx -> (secretKey[idx].toInt() xor maskA[idx].toInt()).toByte() }
+    val iv = ByteArray(12).also { rng.nextBytes(it) }
+    val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+    cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(secretKey, "AES"), GCMParameterSpec(128, iv))
+    val cipherAndTag = cipher.doFinal(defaultCloudBaseUrl.toByteArray(Charsets.UTF_8))
+    secretKey.fill(0)
+    listOf(maskA.toHexString(), maskB.toHexString(), iv.toHexString(), cipherAndTag.toHexString())
+} else {
+    listOf("", "", "", "")
 }
 
 android {
@@ -19,6 +57,11 @@ android {
         versionName = "0.1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        buildConfigField("String", "CONFIG_SEED_A", "\"$configSeedAHex\"")
+        buildConfigField("String", "CONFIG_SEED_B", "\"$configSeedBHex\"")
+        buildConfigField("String", "CONFIG_NONCE", "\"$configNonceHex\"")
+        buildConfigField("String", "CONFIG_PAYLOAD", "\"$configPayloadHex\"")
     }
 
     buildTypes {

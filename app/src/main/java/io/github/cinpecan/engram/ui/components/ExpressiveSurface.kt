@@ -5,7 +5,9 @@ import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Box
@@ -31,10 +33,12 @@ import androidx.compose.ui.unit.dp
  * Material 3 Expressive tactile card surface using spring shape morphing, gentle spatial scale,
  * and clean state-layer tonal shift instead of legacy harsh ink ripples.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ExpressiveCardSurface(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    onLongClick: (() -> Unit)? = null,
     restCorner: Dp = 20.dp,
     pressedCorner: Dp = 15.dp,
     containerColor: Color = MaterialTheme.colorScheme.surface,
@@ -68,10 +72,11 @@ fun ExpressiveCardSurface(
                 scaleX = scale
                 scaleY = scale
             }
-            .clickable(
+            .combinedClickable(
                 interactionSource = interactionSource,
                 indication = null,
                 onClick = onClick,
+                onLongClick = onLongClick,
             ),
         shape = shape,
         color = bgColor,

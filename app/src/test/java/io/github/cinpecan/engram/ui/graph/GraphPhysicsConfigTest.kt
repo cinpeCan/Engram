@@ -25,12 +25,16 @@ class GraphPhysicsConfigTest {
     }
 
     @Test
-    fun computeAutoNaturalLengthDp_staysWithinReadableBounds() {
-        val shortLen = computeAutoNaturalLengthDp("王总", "老李", "引荐")
-        val longLen = computeAutoNaturalLengthDp("财务刘敏", "柔性屏模组", "提交验收单")
-        assertTrue(shortLen in 132f..188f)
-        assertTrue(longLen in 132f..188f)
-        assertTrue(longLen > shortLen)
+    fun graphRubberPhysics_adaptsLengthToLabelWithinReadableBounds() {
+        assertTrue(GraphRubberPhysics.isAutoLength)
+        assertTrue(GraphRubberPhysics.elasticity > 5.6f)
+        val shortLen = GraphRubberPhysics.resolveNaturalLengthDp(contentWidthDp = 20f)
+        val longLen = GraphRubberPhysics.resolveNaturalLengthDp(contentWidthDp = 80f)
+        val hugeLen = GraphRubberPhysics.resolveNaturalLengthDp(contentWidthDp = 400f)
+        assertEquals(132f, shortLen, 0.001f)
+        assertTrue(longLen > shortLen && longLen <= 188f)
+        assertEquals(188f, hugeLen, 0.001f)
+        assertTrue(GraphPlanetPhysics.elasticity > 4.2f)
     }
 
     @Test

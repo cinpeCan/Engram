@@ -9,13 +9,14 @@ flowchart TB
     subgraph AndroidApp[":app (Kotlin + Compose M3 Expressive + Nav3 + Koin 4.2)"]
         Capture["CaptureScreen\n(Bulleted Timeline, Symmetrical Composer, Calendar Confirm)"]
         RawSheet["RawMemorySheet (ModalBottomSheet)\n(De-emphasized Full Raw Note & Copy)"]
-        Graph["GraphScreen (Single-Memory Expandable Sheet)\n(Frameless Bounds, Δh/2 Recentering, Deponder 0.5.0)"]
+        Graph["GraphScreen (Single-Memory Expandable Sheet)\n(Frameless Bounds, Δh/2 Recentering, Deponder 0.6.0)"]
         EngineSheet["EngineBottomSheet\n(Frameless Mode Switch, Direct ModelScope Fetch, Multi-Device Sync)"]
 
         Analyzer["MemoryAnalyzer\n(JSON Schema + Bullet Normalizer + Fallback)"]
         Router["UnifiedInferenceRouter"]
+        Session["CloudSessionMonitor\n(Debounced MVI Bearer Probe)"]
 
-        SQLite["EngramDatabase / RoomMemoryStore\n(Room v3 WAL + @Relation Cold Flow)"]
+        SQLite["EngramDatabase / RoomMemoryStore\n(Room v4 WAL + Tombstones + @Relation Cold Flow)"]
         Prefs["EnginePreferencesRepository\n(DataStore Config & SyncKey)"]
     end
 
@@ -30,7 +31,8 @@ flowchart TB
     end
 
     subgraph Gateway["server/ (FastAPI + SQLite WAL)"]
-        Sync["POST /api/v1/memories/sync"]
+        Auth["GET /api/v1/auth/status"]
+        Sync["POST /api/v1/memories/sync & delete"]
         SSE["POST /api/v1/analyze/stream"]
     end
 
@@ -42,12 +44,13 @@ flowchart TB
     SQLite --> Capture
     SQLite --> RawSheet
     SQLite --> Graph
-    SQLite <-->|LWW Sync by syncKey| Sync
+    SQLite <-->|LWW + Tombstone Sync| Sync
     EngineSheet -->|OkHttp Range + .sha256| Weights
     EngineSheet -->|Trigger Sync| Sync
+    Prefs & EngineSheet --> Session -->|Bearer Probe| Auth
     Manager --> JNI
     JNI --> Coalescer --> Router
-    Contracts -.-> Analyzer & Sync & SSE
+    Contracts -.-> Analyzer & Auth & Sync & SSE
     Prefs --> Router & EngineSheet
 ```
 
@@ -78,7 +81,7 @@ stateDiagram-v2
 
 ---
 
-## 3. Single-Memory Frameless Sheet, Gesture Isolation & Deponder 0.5.0 Invariants
+## 3. Single-Memory Frameless Sheet, Gesture Isolation & Deponder 0.6.0 Invariants
 
 1. **Two-Stage Frameless `GraphSheet` (`BottomSheetSceneStrategy`)**: Opens strictly bound to a single `memoryId` at `50%` `PartiallyExpanded`, supports dragging or single-tapping the `48dp` `DragHandle` to toggle `92%` `Expanded`, and places the sheet-level close (`✕`) action cleanly inside the top `dragHandle` bar without duplicating card summaries, tabs, or inner border rectangles.
 2. **Dynamic Vertical Recentering (`Δheight / 2`)**: `GraphScreen` measures height transitions inside `deponderRoot`'s `onSizeChanged` and shifts every node's vertical coordinate by `Δheight / 2`, keeping the force-directed layout centered across `50% <-> 92%` height changes and inline entity citation toggles.
@@ -92,5 +95,5 @@ stateDiagram-v2
 
 ## 4. Capture UI & Window-Inset Discipline
 
-1. **Summary-First Cards & De-emphasized Raw Text**: Timeline cards have no title and format multi-point AI summaries as concise `\n`-separated `• ` bullets without noisy seed/fallback card badges. Raw note text never expands inline and opens lazily via `RawMemorySheet`.
+1. **Summary-First Cards, De-emphasized Raw Text & Tombstone Deletion**: Timeline cards have no title, format multi-point AI summaries as concise `\n`-separated `• ` bullets, mark `SEED` cards concisely with `"预置"` while omitting fallback noise badges, and open raw note text lazily via `RawMemorySheet`. Long-pressing a card opens a floating delete bubble backed by `Snackbar` undo and `deleted_memories` tombstones.
 2. **True Edge-to-Edge & Reactive System Calendar Sync**: System bars use transparent `SystemBarStyle` with disabled contrast enforcement; `CaptureScreen` scrolls unclipped behind both bars while `CollapsibleBottomConsoleLayout` applies a single `WindowInsets.ime.union(WindowInsets.navigationBars)` inset and dismisses IME on scroll or blank/card tap. Calendar confirmation pills subscribe reactively to `CalendarContract.CONTENT_URI` via `SystemCalendarObserver` (`callbackFlow` + `ContentObserver`), reflecting real save/edit/delete state without optimistic flags or `ON_RESUME` polling.

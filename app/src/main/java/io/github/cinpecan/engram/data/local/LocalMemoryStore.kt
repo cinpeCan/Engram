@@ -21,4 +21,8 @@ interface LocalMemoryStore {
     suspend fun mergeRemoteMemories(remoteItems: List<MemoryItem>): Int
     suspend fun getAllMemories(): List<MemoryItem>
     suspend fun countMemories(): Int
+
+    suspend fun deleteMemory(memoryId: String, deletedAtMillis: Long = System.currentTimeMillis()) = Unit
+    suspend fun restoreMemory(item: MemoryItem) = Unit
+    suspend fun getDeletedTombstones(): Map<String, Long> = emptyMap()
 }

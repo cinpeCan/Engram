@@ -11,8 +11,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
     entities = [
         MemoryEntity::class,
         MemoryRelationEntity::class,
+        DeletedMemoryEntity::class,
     ],
-    version = 3,
+    version = 4,
     exportSchema = false,
 )
 abstract class EngramDatabase : RoomDatabase() {
@@ -28,6 +29,14 @@ abstract class EngramDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS deleted_memories (id TEXT NOT NULL, deleted_at INTEGER NOT NULL, PRIMARY KEY(id))",
+                )
+            }
+        }
+
         fun create(context: Context): EngramDatabase =
             Room.databaseBuilder(
                 context.applicationContext,
@@ -35,7 +44,7 @@ abstract class EngramDatabase : RoomDatabase() {
                 DB_NAME,
             )
                 .setJournalMode(JournalMode.WRITE_AHEAD_LOGGING)
-                .addMigrations(MIGRATION_2_3)
+                .addMigrations(MIGRATION_2_3, MIGRATION_3_4)
                 .fallbackToDestructiveMigration(dropAllTables = true)
                 .build()
     }

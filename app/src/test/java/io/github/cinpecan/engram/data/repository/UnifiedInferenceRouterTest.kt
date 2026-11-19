@@ -173,4 +173,78 @@ class UnifiedInferenceRouterTest {
         assertEquals(AnalysisSource.LOCAL_RULE_FALLBACK, degradedCompleted.source)
         assertEquals("云端未连接 · 已用本地提炼", degradedCompleted.telemetryBadge)
     }
+
+    @Test
+    fun cloudModeAttachesBearerTokenAndReportsHonest401And429Badges() = runTest {
+        val capturedAuthHeaders = mutableListOf<String?>()
+        val statusToReturn = intArrayOf(401)
+        val mockHttp = OkHttpClient.Builder()
+            .addInterceptor { chain ->
+                val req = chain.request()
+                capturedAuthHeaders.add(req.header("Authorization"))
+                val code = statusToReturn[0]
+                Response.Builder()
+                    .request(req)
+                    .protocol(Protocol.HTTP_1_1)
+                    .code(code)
+                    .message("Error $code")
+                    .body("{\"detail\":\"err\"}".toResponseBody("application/json".toMediaType()))
+                    .build()
+            }
+            .build()
+
+        val edge = FakeEdgeEngine(isBackendAvailable = false, initialState = EngineState.Unloaded)
+        val router = UnifiedInferenceRouter(edge, CloudSseClient(mockHttp), MemoryAnalyzer())
+
+        // Placeholder syncKey omits Authorization header and 401 maps to honest badge
+        val events401 = router.distillMemory(
+            content = "明天评审补充条款",
+            nowMillis = 1_700_000_000_000L,
+            mode = InferenceMode.CLOUD_COLLAB,
+            serverBaseUrl = "http://127.0.0.1:8787",
+            authToken = "engram-demo",
+        ).toList()
+        assertEquals(listOf<String?>(null), capturedAuthHeaders)
+        val completed401 = events401.filterIsInstance<DistillationEvent.Completed>().single()
+        assertEquals(AnalysisSource.LOCAL_RULE_FALLBACK, completed401.source)
+        assertEquals("需有效体验码 · 已用本地提炼", completed401.telemetryBadge)
+
+        // Valid demo token sends Authorization: Bearer <token> and 429 maps to quota badge
+        statusToReturn[0] = 429
+        val token = listOf("eng", "69200000", "team01", "b".repeat(24)).joinToString("_")
+        val events429 = router.distillMemory(
+            content = "明天评审补充条款",
+            nowMillis = 1_700_000_000_000L,
+            mode = InferenceMode.CLOUD_COLLAB,
+            serverBaseUrl = "http://127.0.0.1:8787",
+            authToken = token,
+        ).toList()
+        assertEquals("Bearer $token", capturedAuthHeaders.last())
+        val completed429 = events429.filterIsInstance<DistillationEvent.Completed>().single()
+        assertEquals(AnalysisSource.LOCAL_RULE_FALLBACK, completed429.source)
+        assertEquals("云端体验额度已满 · 已用本地提炼", completed429.telemetryBadge)
+
+        // When real MNN edge model is ready, cloud 401 seamlessly falls back to MNN_EDGE first
+        val validJson = """
+            {"summary":"明日评审补充条款。","tags":["日程跟进"],"calendarProposal":null,"relations":[]}
+        """.trimIndent()
+        val readyEdge = FakeEdgeEngine(
+            isBackendAvailable = true,
+            initialState = EngineState.Ready("qwen2.5-0.5b-instruct-mnn", "MNN-LLM (ARM64)", 400L * 1024 * 1024),
+            emittedJson = validJson,
+        )
+        statusToReturn[0] = 401
+        val edgeFallbackRouter = UnifiedInferenceRouter(readyEdge, CloudSseClient(mockHttp), MemoryAnalyzer())
+        val edgeEvents = edgeFallbackRouter.distillMemory(
+            content = "明天评审补充条款",
+            nowMillis = 1_700_000_000_000L,
+            mode = InferenceMode.CLOUD_COLLAB,
+            serverBaseUrl = "http://127.0.0.1:8787",
+            authToken = null,
+        ).toList()
+        assertTrue(readyEdge.generateCalled)
+        val edgeCompleted = edgeEvents.filterIsInstance<DistillationEvent.Completed>().single()
+        assertEquals(AnalysisSource.MNN_EDGE, edgeCompleted.source)
+        assertTrue(edgeCompleted.telemetryBadge.startsWith("云端降级 · MNN"))
+    }
 }

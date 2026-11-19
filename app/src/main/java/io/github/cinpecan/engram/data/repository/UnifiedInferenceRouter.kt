@@ -1,6 +1,7 @@
 package io.github.cinpecan.engram.data.repository
 
 import io.github.cinpecan.engram.data.remote.AnalysisStreamRequestDto
+import io.github.cinpecan.engram.data.remote.CloudGatewayHttpException
 import io.github.cinpecan.engram.data.remote.CloudSseClient
 import io.github.cinpecan.engram.domain.analyzer.MemoryAnalyzer
 import io.github.cinpecan.engram.domain.model.AnalysisSource
@@ -15,6 +16,7 @@ import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 
@@ -41,30 +43,43 @@ class UnifiedInferenceRouter(
     private val analyzer: MemoryAnalyzer,
     private val zoneId: ZoneId = ZoneId.systemDefault(),
 ) {
+    private sealed interface CloudAttemptResult {
+        data class Success(val event: DistillationEvent.Completed) : CloudAttemptResult
+        data class Failure(val error: Throwable) : CloudAttemptResult
+    }
+
     fun distillMemory(
         content: String,
         nowMillis: Long,
         mode: InferenceMode,
         serverBaseUrl: String,
+        authToken: String? = null,
     ): Flow<DistillationEvent> = flow {
-        var degradedFromCloud = false
+        var cloudFailure: Throwable? = null
 
         if (mode == InferenceMode.CLOUD_COLLAB) {
-            val cloudCompleted = tryCloudStream(
-                content = content,
-                nowMillis = nowMillis,
-                serverBaseUrl = serverBaseUrl,
-                onPreview = { partial ->
-                    emit(DistillationEvent.StreamingPreview(partial, "云端 SSE 流式提炼中…"))
-                },
-            )
-            if (cloudCompleted != null) {
-                emit(cloudCompleted)
-                return@flow
+            when (
+                val cloudResult = tryCloudStream(
+                    content = content,
+                    nowMillis = nowMillis,
+                    serverBaseUrl = serverBaseUrl,
+                    authToken = authToken,
+                    onPreview = { partial ->
+                        emit(DistillationEvent.StreamingPreview(partial, "云端 SSE 流式提炼中…"))
+                    },
+                )
+            ) {
+                is CloudAttemptResult.Success -> {
+                    emit(cloudResult.event)
+                    return@flow
+                }
+                is CloudAttemptResult.Failure -> {
+                    cloudFailure = cloudResult.error
+                }
             }
-            degradedFromCloud = true
         }
 
+        val degradedFromCloud = cloudFailure != null
         if (edgeEngine.state.value is EngineState.Ready || edgeEngine.isBackendAvailable) {
             val edgeCompleted = tryEdgeStream(
                 content = content,
@@ -81,10 +96,14 @@ class UnifiedInferenceRouter(
         }
 
         val fallbackPayload = analyzer.fallbackAnalyze(content, nowMillis)
-        val fallbackBadge = if (degradedFromCloud) {
-            "云端未连接 · 已用本地提炼"
-        } else {
-            ""
+        val fallbackBadge = when (val failure = cloudFailure) {
+            null -> ""
+            is CloudGatewayHttpException -> when (failure.statusCode) {
+                401 -> "需有效体验码 · 已用本地提炼"
+                429 -> "云端体验额度已满 · 已用本地提炼"
+                else -> "云端未连接 · 已用本地提炼"
+            }
+            else -> "云端未连接 · 已用本地提炼"
         }
         emit(
             DistillationEvent.Completed(
@@ -99,8 +118,9 @@ class UnifiedInferenceRouter(
         content: String,
         nowMillis: Long,
         serverBaseUrl: String,
+        authToken: String?,
         onPreview: suspend (String) -> Unit,
-    ): DistillationEvent.Completed? = runCatching {
+    ): CloudAttemptResult = try {
         val startNs = System.nanoTime()
         var firstTokenMs = -1L
         var lastLatencyMs = 1L
@@ -115,7 +135,7 @@ class UnifiedInferenceRouter(
             nowIso = nowIso,
         )
 
-        cloudSseClient.streamAnalyze(serverBaseUrl, request).collect { chunk ->
+        cloudSseClient.streamAnalyze(serverBaseUrl, request, authToken = authToken).collect { chunk ->
             lastLatencyMs = chunk.latencyMs.coerceAtLeast(1L)
             if (chunk.delta.isNotEmpty()) {
                 if (firstTokenMs < 0L) {
@@ -142,19 +162,25 @@ class UnifiedInferenceRouter(
             tokPerSec,
         )
 
-        DistillationEvent.Completed(
-            payload = merged,
-            source = AnalysisSource.CLOUD_SSE,
-            telemetryBadge = badge,
+        CloudAttemptResult.Success(
+            DistillationEvent.Completed(
+                payload = merged,
+                source = AnalysisSource.CLOUD_SSE,
+                telemetryBadge = badge,
+            ),
         )
-    }.getOrNull()
+    } catch (e: CancellationException) {
+        throw e
+    } catch (t: Throwable) {
+        CloudAttemptResult.Failure(t)
+    }
 
     private suspend fun tryEdgeStream(
         content: String,
         nowMillis: Long,
         degradedFromCloud: Boolean,
         onPreview: suspend (String, String) -> Unit,
-    ): DistillationEvent.Completed? = runCatching {
+    ): DistillationEvent.Completed? = try {
         val prompt = analyzer.buildAnalysisPrompt(content, nowMillis)
         val stageLabel = if (degradedFromCloud) {
             "云端降级 · 端侧 MNN 推理中…"
@@ -196,5 +222,9 @@ class UnifiedInferenceRouter(
             source = AnalysisSource.MNN_EDGE,
             telemetryBadge = badge,
         )
-    }.getOrNull()
+    } catch (e: CancellationException) {
+        throw e
+    } catch (_: Throwable) {
+        null
+    }
 }

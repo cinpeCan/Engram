@@ -91,3 +91,21 @@ data class MemorySyncResponseDto(
     val serverTimeMillis: Long,
     val memories: List<SyncMemoryItemDto>,
 )
+
+@Serializable
+data class AuthStatusResponseDto(
+    val status: String = "ok",
+    val mode: String = "open",
+    val remainingQuota: Int? = null,
+)
+
+@Serializable
+data class MemoryDeleteRequestDto(
+    val syncKey: String,
+    val deletedIds: List<String>,
+)
+
+@Serializable
+data class MemoryDeleteResponseDto(
+    val deletedCount: Int = 0,
+)

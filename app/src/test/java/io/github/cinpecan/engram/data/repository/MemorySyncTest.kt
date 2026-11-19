@@ -1,7 +1,10 @@
 package io.github.cinpecan.engram.data.repository
 
 import io.github.cinpecan.engram.data.local.LocalMemoryStore
+import io.github.cinpecan.engram.data.remote.CloudGatewayHttpException
 import io.github.cinpecan.engram.data.remote.CloudSseClient
+import io.github.cinpecan.engram.data.remote.MemoryDeleteRequestDto
+import io.github.cinpecan.engram.data.remote.MemoryDeleteResponseDto
 import io.github.cinpecan.engram.data.remote.MemorySyncClient
 import io.github.cinpecan.engram.data.remote.MemorySyncRequestDto
 import io.github.cinpecan.engram.data.remote.MemorySyncResponseDto
@@ -39,11 +42,13 @@ class MemorySyncTest {
 
     private class InMemoryStore(initial: List<MemoryItem>) : LocalMemoryStore {
         private val items = MutableStateFlow(initial)
+        private val tombstones = LinkedHashMap<String, Long>()
         override fun observeMemories(): Flow<List<MemoryItem>> = items
         override fun observeMemoryById(memoryId: String): Flow<MemoryItem?> =
             items.map { list -> list.firstOrNull { it.id == memoryId } }
         override fun observeMemoriesForEntity(entityName: String): Flow<List<MemoryItem>> = flow { emit(emptyList()) }
         override suspend fun insertRawMemory(item: MemoryItem) {
+            tombstones.remove(item.id)
             items.value = listOf(item) + items.value
         }
         override suspend fun updateMemoryAnalysis(
@@ -58,6 +63,13 @@ class MemorySyncTest {
             val map = items.value.associateBy { it.id }.toMutableMap()
             var applied = 0
             for (remote in remoteItems) {
+                val deletedAt = tombstones[remote.id]
+                if (deletedAt != null) {
+                    if (remote.updatedAtMillis <= deletedAt) {
+                        continue
+                    }
+                    tombstones.remove(remote.id)
+                }
                 val existing = map[remote.id]
                 val shouldApply = existing == null || remote.updatedAtMillis > existing.updatedAtMillis
                 if (shouldApply) {
@@ -71,6 +83,18 @@ class MemorySyncTest {
 
         override suspend fun getAllMemories(): List<MemoryItem> = items.value
         override suspend fun countMemories(): Int = items.value.size
+
+        override suspend fun deleteMemory(memoryId: String, deletedAtMillis: Long) {
+            items.value = items.value.filterNot { it.id == memoryId }
+            tombstones[memoryId] = deletedAtMillis
+        }
+
+        override suspend fun restoreMemory(item: MemoryItem) {
+            tombstones.remove(item.id)
+            items.value = (listOf(item) + items.value).sortedByDescending { it.createdAtMillis }
+        }
+
+        override suspend fun getDeletedTombstones(): Map<String, Long> = tombstones.toMap()
     }
 
     private class StubEngine : EdgeAiEngine {
@@ -192,5 +216,143 @@ class MemorySyncTest {
         assertEquals(2_500L, merged["mem_local"]?.updatedAtMillis)
         assertEquals(1, merged["mem_remote"]?.relations?.size)
         assertTrue(merged["mem_remote"]?.calendarSaved == true)
+    }
+
+    @Test
+    fun syncAttachesBearerTokenWhenNonPlaceholderAndPropagatesHttpStatus() = runTest {
+        val capturedHeaders = mutableListOf<String?>()
+        val capturedSyncKeys = mutableListOf<String>()
+        val responseCode = intArrayOf(200)
+        val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+        val mockHttp = OkHttpClient.Builder()
+            .addInterceptor { chain ->
+                val req = chain.request()
+                capturedHeaders.add(req.header("Authorization"))
+                val buf = Buffer()
+                req.body?.writeTo(buf)
+                val parsed = json.decodeFromString<MemorySyncRequestDto>(buf.readUtf8())
+                capturedSyncKeys.add(parsed.syncKey)
+                val code = responseCode[0]
+                val bodyJson = if (code == 200) {
+                    json.encodeToString(
+                        MemorySyncResponseDto(
+                            syncKey = parsed.syncKey,
+                            upsertedCount = 0,
+                            totalCount = 0,
+                            serverTimeMillis = 1234L,
+                            memories = emptyList(),
+                        ),
+                    )
+                } else {
+                    "{\"detail\":\"unauthorized\"}"
+                }
+                Response.Builder()
+                    .request(req)
+                    .protocol(Protocol.HTTP_1_1)
+                    .code(code)
+                    .message("HTTP $code")
+                    .body(bodyJson.toResponseBody("application/json".toMediaType()))
+                    .build()
+            }
+            .build()
+
+        val repo = MemoryRepository(
+            store = InMemoryStore(emptyList()),
+            inferenceRouter = UnifiedInferenceRouter(StubEngine(), CloudSseClient(mockHttp), MemoryAnalyzer()),
+            syncClient = MemorySyncClient(mockHttp, json),
+            backgroundScope = backgroundScope,
+        )
+
+        val token = listOf("eng", "69200000", "team01", "c".repeat(24)).joinToString("_")
+        repo.syncWithServer("http://127.0.0.1:8787", token).getOrThrow()
+        assertEquals("Bearer $token", capturedHeaders.last())
+        assertEquals(token, capturedSyncKeys.last())
+
+        // Blank syncKey uses placeholder wire key and omits Authorization header
+        responseCode[0] = 401
+        val failure = repo.syncWithServer("http://127.0.0.1:8787", "").exceptionOrNull()
+        assertEquals(null, capturedHeaders.last())
+        assertEquals("engram-demo", capturedSyncKeys.last())
+        assertTrue(failure is CloudGatewayHttpException)
+        assertEquals(401, (failure as CloudGatewayHttpException).statusCode)
+    }
+
+    @Test
+    fun deletedTombstonePushesRemoteDeleteAndBlocksZombieResurrection() = runTest {
+        val deletedNote = MemoryItem(
+            id = "mem_deleted",
+            content = "将被删除的记录",
+            summary = "将被删除的记录",
+            tags = emptyList(),
+            createdAtMillis = 1_000L,
+            analysisStatus = MemoryAnalysisStatus.READY,
+            calendarProposal = null,
+            calendarSaved = false,
+            relations = emptyList(),
+            analysisSource = AnalysisSource.MNN_EDGE,
+            updatedAtMillis = 1_500L,
+        )
+        val pushedDeletes = mutableListOf<List<String>>()
+        val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+        val mockHttp = OkHttpClient.Builder()
+            .addInterceptor { chain ->
+                val req = chain.request()
+                val buf = Buffer()
+                req.body?.writeTo(buf)
+                val rawReq = buf.readUtf8()
+                val responseJson = if (req.url.encodedPath.endsWith("/memories/delete")) {
+                    val delReq = json.decodeFromString<MemoryDeleteRequestDto>(rawReq)
+                    pushedDeletes.add(delReq.deletedIds)
+                    json.encodeToString(MemoryDeleteResponseDto(deletedCount = delReq.deletedIds.size))
+                } else {
+                    // Simulate stale server still returning mem_deleted with older timestamp
+                    json.encodeToString(
+                        MemorySyncResponseDto(
+                            syncKey = "engram-demo",
+                            upsertedCount = 0,
+                            totalCount = 1,
+                            serverTimeMillis = 9_999L,
+                            memories = listOf(
+                                SyncMemoryItemDto(
+                                    id = "mem_deleted",
+                                    content = "将被删除的记录",
+                                    summary = "将被删除的记录",
+                                    tags = emptyList(),
+                                    createdAtMillis = 1_000L,
+                                    updatedAtMillis = 1_500L,
+                                    analysisStatus = "READY",
+                                    calendarProposal = null,
+                                    calendarSaved = false,
+                                    analysisSource = "MNN_EDGE",
+                                    telemetryBadge = "",
+                                    relations = emptyList(),
+                                ),
+                            ),
+                        ),
+                    )
+                }
+                Response.Builder()
+                    .request(req)
+                    .protocol(Protocol.HTTP_1_1)
+                    .code(200)
+                    .message("OK")
+                    .body(responseJson.toResponseBody("application/json".toMediaType()))
+                    .build()
+            }
+            .build()
+
+        val store = InMemoryStore(listOf(deletedNote))
+        val repo = MemoryRepository(
+            store = store,
+            inferenceRouter = UnifiedInferenceRouter(StubEngine(), CloudSseClient(mockHttp), MemoryAnalyzer()),
+            syncClient = MemorySyncClient(mockHttp, json),
+            backgroundScope = backgroundScope,
+        )
+
+        repo.deleteMemory("mem_deleted")
+        val summary = repo.syncWithServer("http://127.0.0.1:8787", "").getOrThrow()
+        assertEquals(listOf(listOf("mem_deleted")), pushedDeletes)
+        assertEquals(0, summary.pulledCount)
+        assertTrue(store.getAllMemories().isEmpty())
     }
 }

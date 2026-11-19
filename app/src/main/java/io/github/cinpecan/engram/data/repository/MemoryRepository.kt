@@ -6,6 +6,7 @@ import io.github.cinpecan.engram.data.calendar.SystemCalendarObserver
 import io.github.cinpecan.engram.data.local.LocalMemoryStore
 import io.github.cinpecan.engram.data.preferences.EnginePreferences
 import io.github.cinpecan.engram.data.preferences.EnginePreferencesRepository
+import io.github.cinpecan.engram.data.remote.DefaultCloudEndpointProvider
 import io.github.cinpecan.engram.data.remote.MemorySyncClient
 import io.github.cinpecan.engram.data.remote.MemorySyncRequestDto
 import io.github.cinpecan.engram.data.remote.SyncCalendarProposalDto
@@ -21,8 +22,10 @@ import io.github.cinpecan.engram.domain.model.MemoryItem
 import io.github.cinpecan.engram.domain.model.RelationTriple
 import io.github.cinpecan.engram.domain.model.StreamingPreviewState
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -54,6 +57,7 @@ class MemoryRepository(
     private val backgroundScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
 ) {
     private val seedMutex = Mutex()
+    private val activeDistillationJobs = ConcurrentHashMap<String, Job>()
 
     private val _streamingPreviews = MutableStateFlow<Map<String, StreamingPreviewState>>(emptyMap())
     val streamingPreviews: StateFlow<Map<String, StreamingPreviewState>> = _streamingPreviews.asStateFlow()
@@ -113,13 +117,17 @@ class MemoryRepository(
 
     suspend fun initializeAndSeedIfNeeded() {
         seedMutex.withLock {
-            if (store.countMemories() == 0) {
+            val hasSeeded = preferencesRepository?.preferencesFlow?.first()?.hasSeededStoryline == true
+            if (store.countMemories() == 0 && !hasSeeded) {
                 val seeds = SeedStorylineProvider.createInitialStoryline()
                 for (seed in seeds) {
                     store.insertRawMemory(seed)
                 }
                 preferencesRepository?.markStorylineSeeded()
             } else {
+                if (!hasSeeded && store.countMemories() > 0) {
+                    preferencesRepository?.markStorylineSeeded()
+                }
                 val existingById = store.getAllMemories().associateBy { it.id }
                 val latestSeeds = SeedStorylineProvider.createInitialStoryline()
                 for (seed in latestSeeds) {
@@ -170,10 +178,11 @@ class MemoryRepository(
         )
         store.insertRawMemory(initial)
 
-        backgroundScope.launch {
+        val job = backgroundScope.launch {
             val prefs = preferencesRepository?.preferencesFlow?.first()
             val mode = prefs?.inferenceMode ?: InferenceMode.OFFLINE_EDGE
-            val serverBaseUrl = prefs?.serverBaseUrl ?: EnginePreferences.DEFAULT_SERVER_BASE_URL
+            val serverBaseUrl = prefs?.serverBaseUrl.orEmpty()
+            val syncKey = prefs?.syncKey.orEmpty()
 
             _streamingPreviews.update {
                 it + (id to StreamingPreviewState(partialText = "", stageLabel = "准备提炼…"))
@@ -184,6 +193,7 @@ class MemoryRepository(
                     nowMillis = now,
                     mode = mode,
                     serverBaseUrl = serverBaseUrl,
+                    authToken = syncKey,
                 ).collect { event ->
                     when (event) {
                         is DistillationEvent.StreamingPreview -> {
@@ -203,9 +213,40 @@ class MemoryRepository(
                 }
             } finally {
                 _streamingPreviews.update { it - id }
+                activeDistillationJobs.remove(id)
             }
         }
+        activeDistillationJobs[id] = job
         return initial
+    }
+
+    suspend fun deleteMemory(memoryId: String) {
+        activeDistillationJobs.remove(memoryId)?.cancel()
+        _streamingPreviews.update { it - memoryId }
+        val deletedAt = System.currentTimeMillis()
+        store.deleteMemory(memoryId, deletedAtMillis = deletedAt)
+
+        if (!memoryId.startsWith("seed-")) {
+            val client = syncClient
+            val prefs = preferencesRepository?.preferencesFlow?.first()
+            val token = DefaultCloudEndpointProvider.resolveBearerTokenOrNull(prefs?.syncKey)
+            if (client != null && prefs != null && token != null) {
+                backgroundScope.launch {
+                    runCatching {
+                        client.pushDeletedMemories(
+                            baseUrl = prefs.serverBaseUrl,
+                            syncKey = token.take(64),
+                            deletedIds = listOf(memoryId),
+                            authToken = token,
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    suspend fun restoreMemory(item: MemoryItem) {
+        store.restoreMemory(item)
     }
 
     suspend fun syncWithServer(
@@ -213,15 +254,33 @@ class MemoryRepository(
         syncKey: String,
     ): Result<SyncResultSummary> = runCatching {
         val client = syncClient ?: error("未初始化同步客户端")
-        val cleanedKey = syncKey.trim().ifEmpty { EnginePreferences.DEFAULT_SYNC_KEY }
+        val trimmedKey = syncKey.trim()
+        val wireSyncKey = trimmedKey.ifEmpty { EnginePreferences.PLACEHOLDER_SYNC_KEY }.take(64)
+        val deletedIds = store.getDeletedTombstones().keys
+            .filter { !it.startsWith("seed-") }
+            .take(500)
+        if (deletedIds.isNotEmpty()) {
+            runCatching {
+                client.pushDeletedMemories(
+                    baseUrl = serverBaseUrl,
+                    syncKey = wireSyncKey,
+                    deletedIds = deletedIds,
+                    authToken = trimmedKey,
+                )
+            }
+        }
         val localItems = store.getAllMemories()
             .filter { it.analysisSource != AnalysisSource.SEED }
             .take(500)
         val request = MemorySyncRequestDto(
-            syncKey = cleanedKey,
+            syncKey = wireSyncKey,
             memories = localItems.map { it.toSyncDto() },
         )
-        val response = client.syncMemories(serverBaseUrl, request)
+        val response = client.syncMemories(
+            baseUrl = serverBaseUrl,
+            requestPayload = request,
+            authToken = trimmedKey,
+        )
         val pulledApplied = store.mergeRemoteMemories(response.memories.map { it.toDomain() })
         SyncResultSummary(
             uploadedCount = response.upsertedCount,

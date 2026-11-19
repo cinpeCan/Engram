@@ -31,7 +31,11 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
+import okhttp3.Protocol
+import okhttp3.Response
+import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -194,5 +198,77 @@ class EngineViewModelTest {
         assertTrue(releaseEffect.message.contains("128.0 MB"))
         assertEquals(listOf(UnloadReason.USER_REQUESTED), engine.unloadReasons)
         assertEquals(EngineState.Unloaded, vm.runtimeStatus.value.engineState)
+    }
+
+    @Test
+    fun defaultsAreEmptyAnd401And429SyncNoticesDoNotLeakHosts() = runTest {
+        val dataStore = PreferenceDataStoreFactory.create(
+            scope = CoroutineScope(backgroundScope.coroutineContext + Dispatchers.IO),
+            produceFile = { tempFolder.newFile("engine_auth_prefs.preferences_pb") },
+        )
+        val prefsRepo = EnginePreferencesRepository(dataStore)
+        val initialPrefs = prefsRepo.preferencesFlow.first()
+        assertEquals("", initialPrefs.serverBaseUrl)
+        assertEquals("", initialPrefs.syncKey)
+
+        val statusToReturn = intArrayOf(401)
+        val mockHttp = OkHttpClient.Builder()
+            .addInterceptor { chain ->
+                val code = statusToReturn[0]
+                if (code == 0) {
+                    throw java.net.UnknownHostException("secret-internal-host.invalid")
+                }
+                Response.Builder()
+                    .request(chain.request())
+                    .protocol(Protocol.HTTP_1_1)
+                    .code(code)
+                    .message("HTTP $code")
+                    .body("{\"detail\":\"blocked\"}".toResponseBody("application/json".toMediaType()))
+                    .build()
+            }
+            .build()
+
+        val modelsRoot = tempFolder.newFolder("auth_models")
+        val downloadManager = ModelDownloadManager(
+            primaryModelsDir = modelsRoot,
+            externalModelsDir = null,
+            okHttpClient = mockHttp,
+            initialCatalog = emptyList(),
+        )
+        val engine = StubEdgeEngine(isBackendAvailable = false)
+        val router = UnifiedInferenceRouter(engine, CloudSseClient(mockHttp), MemoryAnalyzer())
+        val memoryRepo = MemoryRepository(
+            store = EmptyStore(),
+            inferenceRouter = router,
+            preferencesRepository = prefsRepo,
+            syncClient = MemorySyncClient(mockHttp),
+            backgroundScope = backgroundScope,
+        )
+        val vm = EngineViewModel(engine, downloadManager, prefsRepo, memoryRepo)
+
+        assertEquals("", vm.serverUrlInput.value)
+        assertEquals("", vm.syncKeyInput.value)
+
+        // 401 without demo token
+        vm.onIntent(EngineIntent.SyncMemories)
+        val msg401 = (vm.effects.first() as EngineEffect.ShowMessage).message
+        assertTrue(msg401.contains("有效体验码"))
+        assertFalse(vm.isSyncing.first { !it })
+
+        // 429 quota cap
+        statusToReturn[0] = 429
+        val token = listOf("eng", "69200000", "team01", "d".repeat(24)).joinToString("_")
+        vm.onIntent(EngineIntent.UpdateSyncKeyInput(token))
+        vm.onIntent(EngineIntent.SyncMemories)
+        val msg429 = (vm.effects.first() as EngineEffect.ShowMessage).message
+        assertTrue(msg429.contains("额度已达上限"))
+        assertFalse(vm.isSyncing.first { !it })
+
+        // Network/DNS failure must never echo raw hostname in UI notice
+        statusToReturn[0] = 0
+        vm.onIntent(EngineIntent.SyncMemories)
+        val msgNet = (vm.effects.first() as EngineEffect.ShowMessage).message
+        assertFalse(msgNet.contains("secret-internal-host.invalid"))
+        assertTrue(msgNet.contains("暂未连上同步服务"))
     }
 }
