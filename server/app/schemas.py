@@ -74,3 +74,24 @@ class MemorySyncResponse(BaseModel):
     totalCount: int = Field(ge=0)
     serverTimeMillis: int = Field(ge=0)
     memories: list[SyncMemoryItem]
+
+
+class AuthStatusResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["ok"] = "ok"
+    mode: Literal["demo", "open"]
+    remainingQuota: int | None = None
+
+
+class MemoryDeleteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    syncKey: str = Field(min_length=1, max_length=64)
+    deletedIds: list[str] = Field(max_length=500)
+
+
+class MemoryDeleteResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    deletedCount: int = Field(ge=0)

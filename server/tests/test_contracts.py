@@ -3,14 +3,21 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
+import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import AsyncIterator
 
 import httpx
 import jsonschema
+import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.tokens import mint_demo_token, verify_demo_token
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 CONTRACTS_DIR = ROOT_DIR / "contracts"
@@ -28,7 +35,14 @@ def test_health_endpoint() -> None:
     assert resp.json()["status"] == "ok"
 
 
+def test_healthz_endpoint() -> None:
+    resp = client.get("/healthz")
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "ok"}
+
+
 def test_multi_device_sync_merges_by_timestamp_and_isolates_sync_keys(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("ENGRAM_DEMO_SIGNING_SECRET", raising=False)
     db_path = tmp_path / "sync_test.db"
     monkeypatch.setenv("ENGRAM_DB_PATH", str(db_path))
 
@@ -143,6 +157,8 @@ def test_multi_device_sync_merges_by_timestamp_and_isolates_sync_keys(tmp_path, 
 
 
 def test_analyze_stream_returns_503_when_api_key_missing(monkeypatch) -> None:
+    monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
+    monkeypatch.delenv("ENGRAM_DEMO_SIGNING_SECRET", raising=False)
     monkeypatch.delenv("ENGRAM_CLOUD_API_KEY", raising=False)
     resp = client.post(
         "/api/v1/analyze/stream",
@@ -209,6 +225,8 @@ def test_analyze_stream_sse_matches_contract_and_analysis_schema(monkeypatch) ->
         def stream(self, *args, **kwargs):
             return MockStreamResponse()
 
+    monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
+    monkeypatch.delenv("ENGRAM_DEMO_SIGNING_SECRET", raising=False)
     monkeypatch.setenv("ENGRAM_CLOUD_API_KEY", "sk-test-valid")
     monkeypatch.setenv("ENGRAM_CLOUD_BASE_URL", "https://example.invalid/v1")
     monkeypatch.setenv("ENGRAM_CLOUD_MODEL", "qwen-turbo")
@@ -277,6 +295,8 @@ def test_analyze_stream_emits_error_chunk_when_upstream_fails(monkeypatch) -> No
         def stream(self, *args, **kwargs):
             raise httpx.ConnectError("upstream unreachable")
 
+    monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
+    monkeypatch.delenv("ENGRAM_DEMO_SIGNING_SECRET", raising=False)
     monkeypatch.setenv("ENGRAM_CLOUD_API_KEY", "sk-test-dummy")
     monkeypatch.setenv("ENGRAM_CLOUD_BASE_URL", "https://example.invalid/v1")
     monkeypatch.setattr("app.main.httpx.AsyncClient", FailingAsyncClient)
@@ -316,3 +336,428 @@ def test_analyze_stream_emits_error_chunk_when_upstream_fails(monkeypatch) -> No
     assert chunks[0]["done"] is True
     assert chunks[0]["delta"] == ""
     assert chunks[0]["error"] == "Upstream request failed"
+
+
+def test_vertex_ai_stream_distills_sse_truncates_input_and_handles_errors(monkeypatch) -> None:
+    monkeypatch.delenv("ENGRAM_DEMO_SIGNING_SECRET", raising=False)
+    monkeypatch.delenv("GOOGLE_CLOUD_LOCATION", raising=False)
+    monkeypatch.delenv("ENGRAM_VERTEX_MODEL", raising=False)
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "test-gcp-project")
+
+    analysis_payload = {
+        "summary": "• 明日 15:00 · 软件园B座\n• 与张姐对齐合同条款",
+        "tags": ["商务合同", "日程跟进"],
+        "calendarProposal": None,
+        "relations": [
+            {
+                "source": "张姐",
+                "target": "合同条款",
+                "relation": "对齐",
+                "bidirectional": True,
+            }
+        ],
+    }
+    serialized = json.dumps(analysis_payload, ensure_ascii=False)
+    midpoint = len(serialized) // 2
+    captured_calls: list[dict] = []
+
+    async def fake_event_stream():
+        yield SimpleNamespace(event_type="interaction.created")
+        yield SimpleNamespace(event_type="step.start", index=0)
+        yield SimpleNamespace(
+            event_type="step.delta",
+            delta=SimpleNamespace(type="thought_summary", text="ignored thought"),
+        )
+        yield SimpleNamespace(
+            event_type="step.delta",
+            delta=SimpleNamespace(type="text", text=serialized[:midpoint]),
+        )
+        yield SimpleNamespace(
+            event_type="step.delta",
+            delta=SimpleNamespace(type="text", text=serialized[midpoint:]),
+        )
+        yield SimpleNamespace(event_type="step.stop", index=0)
+        yield SimpleNamespace(event_type="interaction.completed")
+
+    class FakeInteractions:
+        async def create(self, **kwargs):
+            captured_calls.append(kwargs)
+            return fake_event_stream()
+
+    class FakeVertexClient:
+        def __init__(self) -> None:
+            self.aio = SimpleNamespace(interactions=FakeInteractions())
+
+    init_args: list[tuple[str, str]] = []
+
+    def fake_factory(project: str, location: str):
+        init_args.append((project, location))
+        return FakeVertexClient()
+
+    monkeypatch.setattr("app.main._create_vertex_client", fake_factory)
+
+    sse_schema = _load_schema("analysis-sse.schema.json")
+    analysis_schema = _load_schema("memory-analysis.schema.json")
+    chunk_validator = jsonschema.Draft202012Validator(
+        {
+            "$schema": sse_schema["$schema"],
+            "$defs": sse_schema["$defs"],
+            "$ref": "#/$defs/AnalysisStreamChunk",
+        }
+    )
+
+    long_content = "记" * 4500
+    chunks = []
+    saw_done_marker = False
+    with client.stream(
+        "POST",
+        "/api/v1/analyze/stream",
+        json={
+            "content": long_content,
+            "nowIso": "2026-11-20T09:00:00",
+            "model": "client-requested-ignored",
+        },
+    ) as resp:
+        assert resp.status_code == 200
+        for line in resp.iter_lines():
+            if not line or not line.startswith("data:"):
+                continue
+            raw = line.removeprefix("data:").strip()
+            if raw == "[DONE]":
+                saw_done_marker = True
+                continue
+            chunk_obj = json.loads(raw)
+            chunk_validator.validate(chunk_obj)
+            chunks.append(chunk_obj)
+
+    assert saw_done_marker
+    assert init_args == [("test-gcp-project", "global")]
+    assert len(captured_calls) == 1
+    call_kwargs = captured_calls[0]
+    assert call_kwargs["model"] == "gemini-3.5-flash-lite"
+    assert call_kwargs["stream"] is True
+    assert call_kwargs["store"] is False
+    assert call_kwargs["generation_config"]["max_output_tokens"] == 1024
+    assert len(call_kwargs["input"].split("原文：", 1)[1]) == 4000
+    assert all(c["model"] == "gemini-3.5-flash-lite" for c in chunks)
+    combined_json = json.loads("".join(c["delta"] for c in chunks))
+    jsonschema.validate(instance=combined_json, schema=analysis_schema)
+
+
+def test_token_cli_mint_verify_401_and_tenant_isolation(tmp_path, monkeypatch) -> None:
+    secret = "test-hmac-signing-secret"
+    db_path = tmp_path / "tenant_isolation.db"
+    monkeypatch.setenv("ENGRAM_DB_PATH", str(db_path))
+    monkeypatch.setenv("ENGRAM_DEMO_SIGNING_SECRET", secret)
+    monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
+    monkeypatch.setenv("ENGRAM_CLOUD_API_KEY", "sk-test-unused")
+    monkeypatch.setenv("ENGRAM_CLOUD_BASE_URL", "https://example.invalid/v1")
+
+    server_dir = Path(__file__).resolve().parents[1]
+    env = dict(os.environ)
+    env["ENGRAM_DEMO_SIGNING_SECRET"] = secret
+    proc = subprocess.run(
+        [sys.executable, "-m", "app.tokens", "mint", "--tenant", "team01", "--days", "7"],
+        cwd=str(server_dir),
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    minted_lines = [line.strip() for line in proc.stdout.splitlines() if line.strip()]
+    assert len(minted_lines) == 1
+    token_team1 = minted_lines[0]
+    claims_team1 = verify_demo_token(token_team1, secret=secret)
+    assert claims_team1.tenant_id == "team01"
+
+    token_team2 = mint_demo_token(tenant_id="team02", days=7, secret=secret)
+    expired_token = mint_demo_token(
+        tenant_id="team01",
+        days=1,
+        secret=secret,
+        now_epoch=int(time.time()) - 10 * 86400,
+    )
+    parts = token_team1.split("_")
+    tampered_token = f"{parts[0]}_{parts[1]}_{parts[2]}_{'0' * 24}"
+
+    # Unauthenticated, tampered, and expired tokens all return 401 on both endpoints
+    for bad_headers in [
+        {},
+        {"Authorization": f"Bearer {tampered_token}"},
+        {"Authorization": f"Bearer {expired_token}"},
+    ]:
+        sync_401 = client.post(
+            "/api/v1/memories/sync",
+            headers=bad_headers,
+            json={"syncKey": "engram-demo", "memories": []},
+        )
+        assert sync_401.status_code == 401
+
+        analyze_401 = client.post(
+            "/api/v1/analyze/stream",
+            headers=bad_headers,
+            json={
+                "content": "测试未授权拦截",
+                "nowIso": "2026-11-20T09:00:00",
+                "model": "gemini-3.5-flash-lite",
+            },
+        )
+        assert analyze_401.status_code == 401
+
+    # Different tenants sharing the same syncKey="engram-demo" remain strictly isolated
+    sample_memory_1 = {
+        "id": "mem_t1",
+        "content": "团队成员A的私有备忘",
+        "summary": "团队成员A的私有备忘",
+        "tags": [],
+        "createdAtMillis": 1700000000000,
+        "updatedAtMillis": 1700000001000,
+        "analysisStatus": "READY",
+        "calendarProposal": None,
+        "calendarSaved": False,
+        "analysisSource": "MNN_EDGE",
+        "telemetryBadge": "",
+        "relations": [],
+    }
+    resp_t1 = client.post(
+        "/api/v1/memories/sync",
+        headers={"Authorization": f"Bearer {token_team1}"},
+        json={"syncKey": "engram-demo", "memories": [sample_memory_1]},
+    )
+    assert resp_t1.status_code == 200
+    assert [m["id"] for m in resp_t1.json()["memories"]] == ["mem_t1"]
+
+    resp_t2 = client.post(
+        "/api/v1/memories/sync",
+        headers={"Authorization": f"Bearer {token_team2}"},
+        json={"syncKey": "engram-demo", "memories": []},
+    )
+    assert resp_t2.status_code == 200
+    assert resp_t2.json()["totalCount"] == 0
+    assert resp_t2.json()["memories"] == []
+
+
+def test_quota_cap_refund_on_failed_stream_and_monthly_hard_cap(tmp_path, monkeypatch) -> None:
+    secret = "test-quota-secret"
+    db_path = tmp_path / "quota_test.db"
+    monkeypatch.setenv("ENGRAM_DB_PATH", str(db_path))
+    monkeypatch.setenv("ENGRAM_DEMO_SIGNING_SECRET", secret)
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "test-gcp-project")
+    monkeypatch.setenv("ENGRAM_DEMO_MAX_REQUESTS_PER_TOKEN", "2")
+    monkeypatch.setenv("ENGRAM_MONTHLY_HARD_CAP_USD", "1.0")
+    monkeypatch.setenv("ENGRAM_ESTIMATED_COST_PER_REQ_USD", "0.35")
+
+    token_a = mint_demo_token("tenant-a", days=7, secret=secret)
+    token_b = mint_demo_token("tenant-b", days=7, secret=secret)
+
+    should_fail = True
+
+    class FlakyOrOkInteractions:
+        async def create(self, **kwargs):
+            if should_fail:
+                raise RuntimeError("Vertex handshake failed")
+
+            async def ok_stream():
+                yield SimpleNamespace(
+                    event_type="step.delta",
+                    delta=SimpleNamespace(type="text", text="{}"),
+                )
+
+            return ok_stream()
+
+    monkeypatch.setattr(
+        "app.main._create_vertex_client",
+        lambda project, location: SimpleNamespace(aio=SimpleNamespace(interactions=FlakyOrOkInteractions())),
+    )
+
+    payload = {
+        "content": "测试额度计数与失败退还",
+        "nowIso": "2026-11-20T09:00:00",
+        "model": "gemini-3.5-flash-lite",
+    }
+
+    # Failed stream establishment before first event refunds quota (仅成功建流计次)
+    sse_schema = _load_schema("analysis-sse.schema.json")
+    chunk_validator = jsonschema.Draft202012Validator(
+        {
+            "$schema": sse_schema["$schema"],
+            "$defs": sse_schema["$defs"],
+            "$ref": "#/$defs/AnalysisStreamChunk",
+        }
+    )
+    with client.stream(
+        "POST",
+        "/api/v1/analyze/stream",
+        headers={"Authorization": f"Bearer {token_a}"},
+        json=payload,
+    ) as fail_resp:
+        assert fail_resp.status_code == 200
+        body_lines = [line for line in fail_resp.iter_lines() if line.startswith("data:")]
+        chunk_objs = [
+            json.loads(line.removeprefix("data:").strip())
+            for line in body_lines
+            if line.removeprefix("data:").strip() != "[DONE]"
+        ]
+        assert len(chunk_objs) == 1
+        chunk_validator.validate(chunk_objs[0])
+        assert chunk_objs[0]["done"] is True
+        assert chunk_objs[0]["error"] == "Upstream request failed"
+
+    # Now succeed twice for tenant-a (should consume 2/2 slots -> $0.70 spent)
+    should_fail = False
+    for _ in range(2):
+        with client.stream(
+            "POST",
+            "/api/v1/analyze/stream",
+            headers={"Authorization": f"Bearer {token_a}"},
+            json=payload,
+        ) as ok_resp:
+            assert ok_resp.status_code == 200
+            _ = list(ok_resp.iter_lines())
+
+    # 3rd request for tenant-a exceeds per-token cap (2) -> HTTP 429
+    over_token_resp = client.post(
+        "/api/v1/analyze/stream",
+        headers={"Authorization": f"Bearer {token_a}"},
+        json=payload,
+    )
+    assert over_token_resp.status_code == 429
+
+    # Global monthly hard cap across tenants: tenant-b's first request ($0.70 + $0.35 > $1.00) -> HTTP 429
+    over_monthly_resp = client.post(
+        "/api/v1/analyze/stream",
+        headers={"Authorization": f"Bearer {token_b}"},
+        json=payload,
+    )
+    assert over_monthly_resp.status_code == 429
+    assert "Monthly" in over_monthly_resp.json()["detail"]
+
+
+def test_auth_status_probe_is_zero_cost_and_delete_is_tenant_isolated(tmp_path, monkeypatch) -> None:
+    db_path = tmp_path / "auth_and_delete.db"
+    monkeypatch.setenv("ENGRAM_DB_PATH", str(db_path))
+    monkeypatch.delenv("ENGRAM_DEMO_SIGNING_SECRET", raising=False)
+
+    sync_schema = _load_schema("memory-sync.schema.json")
+    auth_status_validator = jsonschema.Draft202012Validator(
+        {
+            "$schema": sync_schema["$schema"],
+            "$defs": sync_schema["$defs"],
+            "$ref": "#/$defs/AuthStatusResponse",
+        }
+    )
+    delete_req_validator = jsonschema.Draft202012Validator(
+        {
+            "$schema": sync_schema["$schema"],
+            "$defs": sync_schema["$defs"],
+            "$ref": "#/$defs/MemoryDeleteRequest",
+        }
+    )
+    delete_resp_validator = jsonschema.Draft202012Validator(
+        {
+            "$schema": sync_schema["$schema"],
+            "$defs": sync_schema["$defs"],
+            "$ref": "#/$defs/MemoryDeleteResponse",
+        }
+    )
+
+    # Open mode returns 200 without Bearer token
+    open_resp = client.get("/api/v1/auth/status")
+    assert open_resp.status_code == 200
+    open_json = open_resp.json()
+    auth_status_validator.validate(open_json)
+    assert open_json == {"status": "ok", "mode": "open", "remainingQuota": None}
+
+    # Demo mode checks token without decrementing quota, and rejects invalid/exhausted tokens
+    secret = "test-auth-status-secret"
+    monkeypatch.setenv("ENGRAM_DEMO_SIGNING_SECRET", secret)
+    monkeypatch.setenv("ENGRAM_DEMO_MAX_REQUESTS_PER_TOKEN", "2")
+    monkeypatch.setenv("ENGRAM_MONTHLY_HARD_CAP_USD", "5.0")
+    monkeypatch.setenv("ENGRAM_ESTIMATED_COST_PER_REQ_USD", "0.0004")
+
+    token_t1 = mint_demo_token("team01", days=7, secret=secret)
+    token_t2 = mint_demo_token("team02", days=7, secret=secret)
+
+    assert client.get("/api/v1/auth/status").status_code == 401
+    for _ in range(3):
+        status_ok = client.get(
+            "/api/v1/auth/status",
+            headers={"Authorization": f"Bearer {token_t1}"},
+        )
+        assert status_ok.status_code == 200
+        status_json = status_ok.json()
+        auth_status_validator.validate(status_json)
+        # Repeated probes must not consume quota
+        assert status_json == {"status": "ok", "mode": "demo", "remainingQuota": 2}
+
+    # Seed memories for team01 and team02 under same syncKey
+    def make_item(mid: str) -> dict:
+        return {
+            "id": mid,
+            "content": f"note {mid}",
+            "summary": f"summary {mid}",
+            "tags": [],
+            "createdAtMillis": 1700000000000,
+            "updatedAtMillis": 1700000001000,
+            "analysisStatus": "READY",
+            "calendarProposal": None,
+            "calendarSaved": False,
+            "analysisSource": "MNN_EDGE",
+            "telemetryBadge": "",
+            "relations": [],
+        }
+
+    assert (
+        client.post(
+            "/api/v1/memories/sync",
+            headers={"Authorization": f"Bearer {token_t1}"},
+            json={"syncKey": "engram-demo", "memories": [make_item("mem_shared_id")]},
+        ).status_code
+        == 200
+    )
+    assert (
+        client.post(
+            "/api/v1/memories/sync",
+            headers={"Authorization": f"Bearer {token_t2}"},
+            json={"syncKey": "engram-demo", "memories": [make_item("mem_shared_id")]},
+        ).status_code
+        == 200
+    )
+
+    # Deleting from team01 removes only team01's item and keeps team02's item intact
+    del_payload = {"syncKey": "engram-demo", "deletedIds": ["mem_shared_id"]}
+    delete_req_validator.validate(del_payload)
+    del_resp = client.post(
+        "/api/v1/memories/delete",
+        headers={"Authorization": f"Bearer {token_t1}"},
+        json=del_payload,
+    )
+    assert del_resp.status_code == 200
+    del_json = del_resp.json()
+    delete_resp_validator.validate(del_json)
+    assert del_json["deletedCount"] == 1
+
+    t1_after = client.post(
+        "/api/v1/memories/sync",
+        headers={"Authorization": f"Bearer {token_t1}"},
+        json={"syncKey": "engram-demo", "memories": []},
+    ).json()
+    t2_after = client.post(
+        "/api/v1/memories/sync",
+        headers={"Authorization": f"Bearer {token_t2}"},
+        json={"syncKey": "engram-demo", "memories": []},
+    ).json()
+    assert t1_after["totalCount"] == 0
+    assert [m["id"] for m in t2_after["memories"]] == ["mem_shared_id"]
+
+    # Exhausting quota flips /api/v1/auth/status to 429
+    from app.storage import try_acquire_demo_quota
+
+    for _ in range(2):
+        ok, _, _ = try_acquire_demo_quota("team01", 2, 5.0, 0.0004)
+        assert ok
+    exhausted = client.get(
+        "/api/v1/auth/status",
+        headers={"Authorization": f"Bearer {token_t1}"},
+    )
+    assert exhausted.status_code == 429

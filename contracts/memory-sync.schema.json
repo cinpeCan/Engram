@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/cinpeCan/Engram/contracts/memory-sync.schema.json",
   "title": "EngramMultiDeviceSyncContract",
-  "description": "Bidirectional Last-Write-Wins incremental synchronization contract across devices sharing a syncKey.",
+  "description": "Bidirectional Last-Write-Wins incremental synchronization, deletion propagation, and session status contracts across devices sharing a syncKey.",
   "$defs": {
     "SyncCalendarProposal": {
       "type": "object",
@@ -98,6 +98,37 @@
           "type": "array",
           "items": { "$ref": "#/$defs/SyncMemoryItem" }
         }
+      }
+    },
+    "AuthStatusResponse": {
+      "type": "object",
+      "required": ["status", "mode", "remainingQuota"],
+      "additionalProperties": false,
+      "properties": {
+        "status": { "type": "string", "enum": ["ok"] },
+        "mode": { "type": "string", "enum": ["demo", "open"] },
+        "remainingQuota": { "type": ["integer", "null"], "minimum": 0 }
+      }
+    },
+    "MemoryDeleteRequest": {
+      "type": "object",
+      "required": ["syncKey", "deletedIds"],
+      "additionalProperties": false,
+      "properties": {
+        "syncKey": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "deletedIds": {
+          "type": "array",
+          "maxItems": 500,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "MemoryDeleteResponse": {
+      "type": "object",
+      "required": ["deletedCount"],
+      "additionalProperties": false,
+      "properties": {
+        "deletedCount": { "type": "integer", "minimum": 0 }
       }
     }
   }
