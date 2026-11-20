@@ -1,0 +1,28 @@
+Copyright (c) 2026 Can Huang. All rights reserved.
+
+This repository ("the Software") is made publicly visible as a source-available
+portfolio for technical evaluation only. No open-source license is granted.
+
+Permitted without further permission:
+  - Viewing, cloning, and building the Software locally for the sole purpose of
+    evaluating its design and implementation.
+
+Not permitted without prior written permission from the copyright holder:
+  - Copying, modifying, merging, publishing, distributing, sublicensing, or
+    selling the Software or any substantial portion of it;
+  - Using the Software, or any part of it, in commercial, production, or
+    redistributed products or services;
+  - Using the Software as training data for machine learning models.
+
+Third-party components referenced by or downloaded at build/run time (including
+Alibaba MNN, Qwen2.5 model weights, Deponder, and Maven Central / PyPI
+dependencies) are governed by their own licenses and are not covered by this
+notice.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE COPYRIGHT
+HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY ARISING FROM, OUT OF
+OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+Licensing inquiries: cinpecan@outlook.com

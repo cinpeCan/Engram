@@ -88,3 +88,22 @@ server/.venv/bin/pytest server/tests
 
 - [System Architecture & State Machines](docs/architecture.md)
 - [On-Device MNN Benchmark Guide](docs/benchmark.md)
+
+---
+
+## License
+
+Copyright © 2026 Can Huang. **All rights reserved.**
+
+This repository is published as a source-available portfolio for technical review only. You may view and build the source to evaluate it. Copying, modifying, redistributing, sublicensing, or using any part of it in commercial or production software requires prior written permission. No open-source license is granted. See [LICENSE](LICENSE) for the full terms.
+
+### Third-Party Components
+
+Third-party components keep their own licenses and are **not** covered by the notice above:
+
+| Component | Usage | License |
+| :--- | :--- | :--- |
+| [Alibaba MNN](https://github.com/alibaba/MNN) | On-device LLM runtime, built locally via `scripts/build_mnn_android.sh` (not vendored) | Apache-2.0 |
+| [Qwen2.5-0.5B-Instruct-MNN](https://modelscope.cn/models/MNN/Qwen2.5-0.5B-Instruct-MNN) | Quantized weights, downloaded at runtime from ModelScope / HuggingFace (not vendored) | Apache-2.0 |
+| [Deponder](https://github.com/cinpeCan/Deponder) | 2D force-directed graph physics (`io.github.cinpecan:deponder-compose`) | Apache-2.0 |
+| AndroidX, Kotlin, Koin, OkHttp, FastAPI, `google-genai` | Maven Central / PyPI dependencies | Respective upstream licenses |
