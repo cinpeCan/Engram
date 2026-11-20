@@ -3,6 +3,18 @@
 > **Privacy-First On-Device AI Memory & 2D Directed Relationship Workspace**  
 > Built as an AI-Native Monorepo combining **Alibaba MNN Edge Inference**, **Cloud SSE Structured Distillation**, **Human-in-the-Loop System Tools**, and **[Deponder 0.6.0](https://github.com/cinpeCan/Deponder)** 2D Physics Graphs inside a single-screen Material 3 workspace.
 
+<p align="center">
+  <img src="docs/images/timeline.jpg" width="250" alt="Timeline with cloud, on-device MNN, and fallback telemetry badges" />
+  &nbsp;
+  <img src="docs/images/relationship-graph.jpg" width="250" alt="Single-memory 2D relationship graph sheet" />
+  &nbsp;
+  <img src="docs/images/engine-sheet.png" width="250" alt="Inference and multi-device sync sheet with masked gateway and token" />
+</p>
+
+<p align="center"><sub>Timeline with per-card engine telemetry · Deponder relationship graph · Inference & sync sheet</sub></p>
+
+> Measured on Samsung Galaxy F52 5G (Snapdragon 750G): on-device MNN Qwen2.5-0.5B INT4 reaches **TTFT ≈ 1.6 s · 14–20 tok/s · +290 MB RSS**; cloud Gemini Flash-Lite streams at **TTFT < 1 s**. See the [benchmark matrix](docs/benchmark.md#3-real-device-mnn-llm-benchmark-matrix).
+
 ---
 
 ## Core Architecture Highlights

@@ -21,13 +21,18 @@ llvm-objdump -p packages/edge-mnn/build/intermediates/merged_native_libs/debug/m
 
 ---
 
-## 3. Real-Device MNN-LLM Benchmark Matrix (Template)
+## 3. Real-Device MNN-LLM Benchmark Matrix
 
-After running `./scripts/build_mnn_android.sh` and deploying `qwen2.5-0.5b-instruct-mnn` onto an `arm64-v8a` device, record hardware telemetry from the `CaptureScreen` card badge and `EngineBottomSheet` RSS readout:
+Measured on a release build after running `./scripts/build_mnn_android.sh` and deploying `qwen2.5-0.5b-instruct-mnn` onto an `arm64-v8a` device. Values are read from the `CaptureScreen` card telemetry badge and the `EngineBottomSheet` RSS readout. Cells marked `—` have not been measured yet.
 
-| Device / SoC | Model & Quantization | Cold Load (ms) | TTFT (ms) | Decode Speed (tok/s) | Peak Process RSS (MB) | Post-Unload RSS (MB) |
-| :--- | :--- | :---: | :---: | :---: | :---: | :---: |
-| *Target Device 1* | `Qwen2.5-0.5B-Instruct-MNN (INT4)` | *TBD* | *TBD* | *TBD* | *TBD* | *TBD* |
+| Device / SoC | Engine & Model | TTFT (ms) | Decode Speed (tok/s) | Model RSS Delta (MB) |
+| :--- | :--- | :---: | :---: | :---: |
+| Samsung Galaxy F52 5G (`SM-E5260`) / Snapdragon 750G | On-device MNN · `Qwen2.5-0.5B-Instruct-MNN (INT4)` | 1,626 – 1,659 | 14.3 – 20.1 | +290 |
+| Samsung Galaxy F52 5G (`SM-E5260`) / Snapdragon 750G | Cloud SSE · Vertex AI `gemini-3.5-flash-lite` (`global`) | 899 – 967 | 103.9 – 116.5 ¹ | — |
+
+¹ Cloud decode speed is estimated client-side from streamed character count (`≈ chars / 2` tokens) over wall-clock time, including network latency; on-device figures come from native MNN token counters.
+
+> Cold load time, peak process RSS, and post-unload RSS are not yet recorded; follow the steps below to extend the matrix.
 
 ### Reproduction Steps
 1. Toggle **Airplane Mode** on the test device and select **端侧离线** in `EngineBottomSheet`.
