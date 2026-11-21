@@ -88,6 +88,7 @@ val dataModule = module {
             preferencesRepository = get(),
             syncClient = get(),
             calendarObserver = get(),
+            cloudSessionMonitor = get(),
         )
     }
     single {
@@ -103,6 +104,7 @@ val dataModule = module {
             edgeEngine = get(),
             cloudSseClient = get(),
             preferencesRepository = get(),
+            cloudSessionMonitor = get(),
         )
     }
 }

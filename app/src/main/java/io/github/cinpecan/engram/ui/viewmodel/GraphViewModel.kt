@@ -23,6 +23,7 @@ import kotlinx.coroutines.launch
 
 sealed interface GraphIntent {
     data object ReplayGrowth : GraphIntent
+    data object ToggleUnfold : GraphIntent
     data class SelectEntity(val entityName: String) : GraphIntent
     data object ClearSelectedEntity : GraphIntent
 }
@@ -41,6 +42,7 @@ data class GraphCanvasState(
     val visibleEdges: List<RelationTriple> = emptyList(),
     val totalEdgeCount: Int = 0,
     val isReplaying: Boolean = false,
+    val isUnfoldEnabled: Boolean = false,
 )
 
 @Immutable
@@ -56,6 +58,7 @@ class GraphViewModel(
 
     private val replayEdgeLimitFlow = MutableStateFlow(Int.MAX_VALUE)
     private val isReplayingFlow = MutableStateFlow(false)
+    private val isUnfoldEnabledFlow = MutableStateFlow(false)
     private val selectedEntityFlow = MutableStateFlow<String?>(null)
 
     private var replayJob: Job? = null
@@ -67,7 +70,8 @@ class GraphViewModel(
         targetMemoryFlow,
         replayEdgeLimitFlow,
         isReplayingFlow,
-    ) { targetMemory, edgeLimit, replaying ->
+        isUnfoldEnabledFlow,
+    ) { targetMemory, edgeLimit, replaying, unfoldEnabled ->
         val allSanitizedEdges = targetMemory?.let { MemoryAnalyzer.sanitizeRelations(it.relations) }.orEmpty()
         val visibleEdges = allSanitizedEdges.take(edgeLimit)
 
@@ -86,6 +90,7 @@ class GraphViewModel(
             visibleEdges = visibleEdges,
             totalEdgeCount = allSanitizedEdges.size,
             isReplaying = replaying,
+            isUnfoldEnabled = unfoldEnabled,
         )
     }.stateIn(
         scope = viewModelScope,
@@ -112,6 +117,7 @@ class GraphViewModel(
     fun onIntent(intent: GraphIntent) {
         when (intent) {
             GraphIntent.ReplayGrowth -> replayStreamingGrowth()
+            GraphIntent.ToggleUnfold -> isUnfoldEnabledFlow.value = !isUnfoldEnabledFlow.value
             is GraphIntent.SelectEntity -> selectedEntityFlow.value = intent.entityName
             GraphIntent.ClearSelectedEntity -> selectedEntityFlow.value = null
         }

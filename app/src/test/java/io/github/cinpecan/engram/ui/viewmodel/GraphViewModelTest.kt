@@ -29,6 +29,7 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
 import okhttp3.OkHttpClient
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -122,7 +123,20 @@ class GraphViewModelTest {
         assertEquals("m1", state.memoryId)
         assertEquals(setOf("Marcus Cole", "Sarah Jenkins", "Elena Vance"), state.nodes.map { it.id }.toSet())
         assertEquals(2, state.totalEdgeCount)
+        assertFalse(state.isUnfoldEnabled)
         assertNull(vm.entityCitation.value)
+
+        vm.onIntent(GraphIntent.ToggleUnfold)
+        val unfoldedState = withTimeout(3_000L) {
+            vm.canvasState.first { it.isUnfoldEnabled }
+        }
+        assertTrue(unfoldedState.isUnfoldEnabled)
+
+        vm.onIntent(GraphIntent.ToggleUnfold)
+        val collapsedState = withTimeout(3_000L) {
+            vm.canvasState.first { !it.isUnfoldEnabled }
+        }
+        assertFalse(collapsedState.isUnfoldEnabled)
 
         vm.onIntent(GraphIntent.SelectEntity("Sarah Jenkins"))
         val citation = withTimeout(3_000L) {

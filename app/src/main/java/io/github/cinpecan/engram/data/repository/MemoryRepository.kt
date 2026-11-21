@@ -54,6 +54,7 @@ class MemoryRepository(
     private val preferencesRepository: EnginePreferencesRepository? = null,
     private val syncClient: MemorySyncClient? = null,
     private val calendarObserver: SystemCalendarObserver? = null,
+    private val cloudSessionMonitor: CloudSessionMonitor? = null,
     private val backgroundScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
 ) {
     private val seedMutex = Mutex()
@@ -216,6 +217,13 @@ class MemoryRepository(
                                 analysisSource = event.source,
                                 telemetryBadge = event.telemetryBadge,
                             )
+                            val touchedCloudQuota = event.source == AnalysisSource.CLOUD_SSE ||
+                                event.telemetryBadge == UnifiedInferenceRouter.BADGE_FALLBACK_UNAUTHORIZED ||
+                                event.telemetryBadge == UnifiedInferenceRouter.BADGE_FALLBACK_QUOTA ||
+                                event.telemetryBadge.startsWith(UnifiedInferenceRouter.BADGE_CLOUD_FALLBACK_PREFIX)
+                            if (touchedCloudQuota) {
+                                cloudSessionMonitor?.retryVerification()
+                            }
                         }
                     }
                 }

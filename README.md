@@ -27,7 +27,7 @@
 - **Honest fallback chain:** cloud → on-device MNN → retrieval-only (*"No model loaded · Showing matched memories"*). It never fabricates an answer.
 
 ### Relationship graph (Deponder 0.6.0)
-- Per-memory frameless graph sheet (50% ↔ 92%) with content-adaptive spring lengths, topological unfolding, canvas-drag isolation from sheet dismissal, and `Δheight / 2` recentering.
+- Per-memory frameless graph sheet (50% ↔ 92%) with content-adaptive spring lengths, serpentine linear-chain viewport containment, opt-in `Unfold` topological untangling (space-adaptive icon/label pills), canvas-drag isolation from sheet dismissal, and `Δheight / 2` recentering.
 
 ### Edge runtime (`:packages:edge-mnn`)
 - Every JNI call is confined to a single `mnn-jni-serial` dispatcher guarded by a `Mutex`.

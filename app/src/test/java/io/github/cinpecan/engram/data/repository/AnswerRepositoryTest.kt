@@ -4,6 +4,7 @@ import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import io.github.cinpecan.engram.data.local.LocalMemoryStore
 import io.github.cinpecan.engram.data.preferences.EnginePreferencesRepository
 import io.github.cinpecan.engram.data.remote.AnswerStreamRequestDto
+import io.github.cinpecan.engram.data.remote.CloudAuthClient
 import io.github.cinpecan.engram.data.remote.CloudSseClient
 import io.github.cinpecan.engram.data.seed.SeedStorylineProvider
 import io.github.cinpecan.engram.domain.model.AnalysisSource
@@ -15,13 +16,19 @@ import io.github.cinpecan.engram.edgemnn.EngineState
 import io.github.cinpecan.engram.edgemnn.InferenceTelemetry
 import io.github.cinpecan.engram.edgemnn.StreamChunk
 import java.time.ZoneOffset
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
@@ -151,6 +158,7 @@ class AnswerRepositoryTest {
         assertEquals(AnswerSource.CLOUD, completed.source)
         assertEquals("Priya is waiting for Liam's sign-off [1].", completed.text)
         assertTrue(completed.badge.startsWith("Gemini 3.5 Flash-Lite · TTFT"))
+        assertTrue("Expected tok/s in cloud badge: ${completed.badge}", completed.badge.contains("tok/s"))
 
         val request = requests.single()
         assertEquals(retrieved.result.citations.map { it.memoryId }, request.contexts.map { it.id })
@@ -221,5 +229,79 @@ class AnswerRepositoryTest {
         assertTrue((events.first() as AnswerEvent.Retrieved).result.isEmpty)
         assertEquals(AnswerEvent.RetrievalOnly(AnswerRepository.REASON_NO_MATCH), events.last())
         assertEquals(null, edge.lastPrompt)
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun cloudAnswerAndUnauthorizedRefreshCloudSessionQuota() = runTest {
+        val prefs = cloudPrefs()
+        val quotaRemaining = AtomicInteger(42)
+        val answerStatus = intArrayOf(200)
+        val mockHttp = OkHttpClient.Builder().addInterceptor { chain ->
+            val req = chain.request()
+            if (req.url.encodedPath.endsWith("/auth/status")) {
+                val code = if (answerStatus[0] == 401) 401 else 200
+                val body = if (code == 200) {
+                    """{"status":"ok","mode":"demo","remainingQuota":${quotaRemaining.get()}}"""
+                } else {
+                    """{"detail":"invalid"}"""
+                }
+                Response.Builder()
+                    .request(req)
+                    .protocol(Protocol.HTTP_1_1)
+                    .code(code)
+                    .message("HTTP $code")
+                    .body(body.toResponseBody("application/json".toMediaType()))
+                    .build()
+            } else {
+                val code = answerStatus[0]
+                val body = if (code == 200) {
+                    quotaRemaining.decrementAndGet()
+                    listOf(
+                        """data: {"delta":"Deposit waits [1].","done":false,"model":"gemini-3.5-flash-lite","latencyMs":120}""",
+                        """data: {"delta":"","done":true,"model":"gemini-3.5-flash-lite","latencyMs":150}""",
+                        "data: [DONE]",
+                    ).joinToString("\n\n", postfix = "\n\n")
+                } else {
+                    """{"detail":"denied"}"""
+                }
+                Response.Builder()
+                    .request(req)
+                    .protocol(Protocol.HTTP_1_1)
+                    .code(code)
+                    .message("HTTP $code")
+                    .body(body.toResponseBody("text/event-stream".toMediaType()))
+                    .build()
+            }
+        }.build()
+
+        val testDispatcher = UnconfinedTestDispatcher(testScheduler)
+        val monitor = CloudSessionMonitor(
+            preferencesRepository = prefs,
+            authClient = CloudAuthClient(mockHttp, json, ioDispatcher = testDispatcher),
+            hasBundledDefaultEndpoint = true,
+            debounceMs = 0L,
+            scope = CoroutineScope(backgroundScope.coroutineContext + testDispatcher),
+        )
+        backgroundScope.launch(testDispatcher) { monitor.state.collect {} }
+        advanceUntilIdle()
+        assertEquals(CloudSessionState.Ready(42), monitor.state.first { it is CloudSessionState.Ready })
+
+        val repo = AnswerRepository(
+            store = SeedStore(seeds),
+            edgeEngine = FakeEdge(isBackendAvailable = false),
+            cloudSseClient = CloudSseClient(mockHttp, json),
+            preferencesRepository = prefs,
+            cloudSessionMonitor = monitor,
+        )
+
+        repo.ask("Why is the Helios Display deposit on hold?").toList()
+        advanceUntilIdle()
+        assertEquals(CloudSessionState.Ready(41), monitor.state.value)
+
+        answerStatus[0] = 401
+        repo.ask("Why is the Helios Display deposit on hold?").toList()
+        advanceUntilIdle()
+        assertEquals(CloudSessionState.InvalidToken, monitor.state.value)
     }
 }

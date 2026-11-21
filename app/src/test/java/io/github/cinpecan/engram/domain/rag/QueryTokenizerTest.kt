@@ -15,9 +15,14 @@ class QueryTokenizerTest {
     }
 
     @Test
-    fun stemCollapsesCommonInflections() {
+    fun stemCollapsesCommonInflectionsAndPreservesUsStems() {
         assertEquals(QueryTokenizer.stem("quoted"), QueryTokenizer.stem("quoting"))
         assertEquals(QueryTokenizer.stem("quotes"), QueryTokenizer.stem("quote"))
+        assertEquals(QueryTokenizer.stem("supply"), QueryTokenizer.stem("supplies"))
+        assertEquals(QueryTokenizer.stem("applied"), QueryTokenizer.stem("apply"))
+        assertEquals(QueryTokenizer.stem("displays"), QueryTokenizer.stem("display"))
+        assertEquals("marcus", QueryTokenizer.stem("marcus"))
+        assertEquals("status", QueryTokenizer.stem("status"))
         assertEquals("net-60".filter { it.isLetterOrDigit() }, "net60")
         assertEquals("2026", QueryTokenizer.stem("2026"))
     }

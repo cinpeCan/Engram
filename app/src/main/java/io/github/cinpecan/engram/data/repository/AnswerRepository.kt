@@ -55,6 +55,7 @@ class AnswerRepository(
     private val edgeEngine: EdgeAiEngine,
     private val cloudSseClient: CloudSseClient,
     private val preferencesRepository: EnginePreferencesRepository? = null,
+    private val cloudSessionMonitor: CloudSessionMonitor? = null,
     private val retriever: GraphRagRetriever = GraphRagRetriever(),
     private val zoneId: ZoneId = ZoneId.systemDefault(),
     private val nowMillis: () -> Long = System::currentTimeMillis,
@@ -84,12 +85,16 @@ class AnswerRepository(
                     serverBaseUrl = prefs?.serverBaseUrl.orEmpty(),
                     authToken = prefs?.syncKey,
                 )
+                cloudSessionMonitor?.retryVerification()
                 emit(completed)
                 return@flow
             } catch (e: CancellationException) {
                 throw e
             } catch (t: Throwable) {
                 cloudFailure = t
+                if (t is CloudGatewayHttpException && (t.statusCode == 401 || t.statusCode == 429)) {
+                    cloudSessionMonitor?.retryVerification()
+                }
                 emit(AnswerEvent.Streaming(textSoFar = "", stage = STAGE_EDGE))
             }
         }
@@ -114,37 +119,48 @@ class AnswerRepository(
         val request = AnswerStreamRequestDto(
             question = question.take(MAX_QUESTION_CHARS),
             nowIso = nowIsoWithOffset(),
-            contexts = citations.map { citation ->
+            contexts = citations.take(MAX_CONTEXTS).map { citation ->
                 AnswerContextDto(
                     id = citation.memoryId,
-                    text = citation.contextText.ifBlank { citation.headline },
+                    text = citation.contextText
+                        .ifBlank { citation.headline }
+                        .take(GraphRagRetriever.MAX_CONTEXT_CHARS)
+                        .ifBlank { "-" },
                     createdAtMillis = citation.createdAtMillis,
                 )
             },
         )
         val startNs = System.nanoTime()
         var firstTokenMs = -1L
+        var lastLatencyMs = 1L
+        var chunkCount = 0
         var modelId = request.model
         val builder = StringBuilder()
         emit(AnswerEvent.Streaming(textSoFar = "", stage = STAGE_CLOUD))
         cloudSseClient.streamAnswer(serverBaseUrl, request, authToken = authToken).collect { chunk ->
+            lastLatencyMs = chunk.latencyMs.coerceAtLeast(1L)
             if (chunk.model.isNotBlank()) modelId = chunk.model
             if (chunk.delta.isNotEmpty()) {
                 if (firstTokenMs < 0L) {
                     firstTokenMs = ((System.nanoTime() - startNs) / 1_000_000L).coerceAtLeast(1L)
                 }
+                chunkCount++
                 builder.append(chunk.delta)
                 emit(AnswerEvent.Streaming(textSoFar = builder.toString(), stage = STAGE_CLOUD))
             }
         }
         val text = builder.toString().trim()
         if (text.isEmpty()) error("Empty cloud answer")
-        val ttft = if (firstTokenMs >= 0L) firstTokenMs else ((System.nanoTime() - startNs) / 1_000_000L)
+        val totalMs = ((System.nanoTime() - startNs) / 1_000_000L).coerceAtLeast(lastLatencyMs)
+        val estimatedTokens = (text.length / 2).coerceAtLeast(chunkCount).coerceAtLeast(1)
+        val tokPerSec = estimatedTokens.toDouble() * 1000.0 / totalMs.toDouble()
+        val ttft = if (firstTokenMs >= 0L) firstTokenMs else totalMs
         val badge = String.format(
             Locale.US,
-            "%s · TTFT %dms",
+            "%s · TTFT %dms · %.1f tok/s",
             UnifiedInferenceRouter.humanizeModelName(modelId),
             ttft,
+            tokPerSec,
         )
         return AnswerEvent.Completed(text = text, source = AnswerSource.CLOUD, badge = badge)
     }
@@ -253,6 +269,7 @@ class AnswerRepository(
         const val REASON_CLOUD_OFFLINE = "Cloud offline · Showing matched memories"
 
         private const val MAX_QUESTION_CHARS = 500
+        private const val MAX_CONTEXTS = 8
         private const val EDGE_MAX_TOKENS = 256
         private const val EDGE_SNIPPET_CHARS = 360
     }

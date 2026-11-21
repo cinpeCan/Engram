@@ -36,6 +36,35 @@ class EngramNavigatorTest {
             navigator.backStack,
         )
 
+        navigator.openRawMemory("m2")
+        assertEquals(
+            listOf<NavKey>(EngramNavKey.Capture, EngramNavKey.RawMemorySheet("m2")),
+            navigator.backStack,
+        )
+
+        // Opening a cited source from AnswerSheet stacks RawMemorySheet so Back preserves AnswerSheet.
+        navigator.openAnswer("Who signed off?")
+        assertEquals(
+            listOf<NavKey>(EngramNavKey.Capture, EngramNavKey.AnswerSheet("Who signed off?")),
+            navigator.backStack,
+        )
+
+        navigator.openRawMemory("seed-2")
+        assertEquals(
+            listOf<NavKey>(
+                EngramNavKey.Capture,
+                EngramNavKey.AnswerSheet("Who signed off?"),
+                EngramNavKey.RawMemorySheet("seed-2"),
+            ),
+            navigator.backStack,
+        )
+
+        navigator.goBack()
+        assertEquals(
+            listOf<NavKey>(EngramNavKey.Capture, EngramNavKey.AnswerSheet("Who signed off?")),
+            navigator.backStack,
+        )
+
         navigator.goBack()
         assertEquals(listOf<NavKey>(EngramNavKey.Capture), navigator.backStack)
 

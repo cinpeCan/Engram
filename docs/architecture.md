@@ -91,10 +91,11 @@ stateDiagram-v2
 
 ## 3. Single-Memory Frameless Sheet, Gesture Isolation & Deponder 0.6.0 Invariants
 
-1. **Two-Stage Frameless `GraphSheet` (`BottomSheetSceneStrategy`)**: Opens strictly bound to a single `memoryId` at `50%` `PartiallyExpanded`, supports dragging or single-tapping the `48dp` `DragHandle` to toggle `92%` `Expanded`, and places the sheet-level close (`✕`) action cleanly inside the top `dragHandle` bar without duplicating card summaries, tabs, or inner border rectangles.
-2. **Dynamic Vertical Recentering (`Δheight / 2`)**: `GraphScreen` measures height transitions inside `deponderRoot`'s `onSizeChanged` and shifts every node's vertical coordinate by `Δheight / 2`, keeping the force-directed layout centered across `50% <-> 92%` height changes and inline entity citation toggles.
-3. **Canvas Gesture Isolation**: A sibling background drag absorber and `NestedScrollConnection` inside `GraphScreen` consume missed drags on empty canvas without intercepting node-level `.deponderDrag()`, preventing accidental sheet dismissal while keeping handle drags responsive.
-4. **Graph Invariants (`MemoryAnalyzer.sanitizeRelations`)**:
+1. **Two-Stage Frameless `GraphSheet` (`BottomSheetSceneStrategy`)**: Opens strictly bound to a single `memoryId` at `50%` `PartiallyExpanded`, supports dragging or single-tapping the `48dp` `DragHandle` to toggle `92%` `Expanded`, and places the sheet-level close (`✕`) action cleanly inside the top `dragHandle` bar without duplicating card summaries, tabs, or inner border rectangles. Floating `Unfold` and `Replay` action pills stay icon-only in compact views and expand to reveal concise labels only when expanded viewport space is ample.
+2. **Opt-In Topological Unfolding & Serpentine Linear-Chain Containment**: Defaults to `RootPhysics.withUnfold(false)` paired with path-ordered serpentine seeding (`computeSeedOffsetsPx`) and diameter-bounded auto-scale (`computeAutoGraphScale`) so long linear chains remain comfortably inside the viewport on frame 0 without shooting off-screen; users trigger `TopologicalUnfolder` live via the `Unfold` toggle.
+3. **Dynamic Vertical Recentering (`Δheight / 2`)**: `GraphScreen` measures height transitions inside `deponderRoot`'s `onSizeChanged` and shifts every node's vertical coordinate by `Δheight / 2`, keeping the force-directed layout centered across `50% <-> 92%` height changes and inline entity citation toggles.
+4. **Canvas Gesture Isolation**: A sibling background drag absorber and `NestedScrollConnection` inside `GraphScreen` consume missed drags on empty canvas without intercepting node-level `.deponderDrag()`, preventing accidental sheet dismissal while keeping handle drags responsive.
+5. **Graph Invariants (`MemoryAnalyzer.sanitizeRelations`)**:
    - Unique non-blank entity IDs under `deponderRoot`.
    - Zero self-loops (`source != target`).
    - At most one edge per unordered pair `(min(a,b), max(a,b))`, automatically merging opposing `(A -> B)` and `(B -> A)` pairs into `DeponderArrowMode.BOTH`.

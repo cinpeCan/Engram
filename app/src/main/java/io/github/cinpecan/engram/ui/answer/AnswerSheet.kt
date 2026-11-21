@@ -22,6 +22,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Hub
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material3.CircularProgressIndicator
@@ -31,7 +32,9 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.AnnotatedString
@@ -92,6 +95,9 @@ fun AnswerSheetContent(
     modifier: Modifier = Modifier,
 ) {
     val citations = retrieval?.citations.orEmpty()
+    val traceEdges = retrieval?.traceEdges.orEmpty()
+    var selectedEntity by remember(question, traceEdges) { mutableStateOf<String?>(null) }
+
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -146,9 +152,8 @@ fun AnswerSheetContent(
             }
         }
 
-        val traceEdges = retrieval?.traceEdges.orEmpty()
         AnimatedVisibility(visible = traceEdges.isNotEmpty(), enter = fadeIn(), exit = fadeOut()) {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -164,7 +169,98 @@ fun AnswerSheetContent(
                 ReasoningGraphCanvas(
                     edges = traceEdges,
                     seedEntities = retrieval?.seedEntities.orEmpty(),
+                    selectedEntity = selectedEntity,
+                    onEntityClick = { entity ->
+                        selectedEntity = if (selectedEntity.equals(entity, ignoreCase = true)) {
+                            null
+                        } else {
+                            entity
+                        }
+                    },
                 )
+
+                val entity = selectedEntity
+                if (!entity.isNullOrBlank()) {
+                    val linkedMemoryIds = traceEdges
+                        .filter { edge ->
+                            edge.source.equals(entity, ignoreCase = true) ||
+                                edge.target.equals(entity, ignoreCase = true)
+                        }
+                        .mapTo(HashSet()) { it.memoryId }
+                    val matchingCitations = citations.filter { citation ->
+                        citation.memoryId in linkedMemoryIds ||
+                            citation.headline.contains(entity, ignoreCase = true) ||
+                            citation.contextText.contains(entity, ignoreCase = true)
+                    }
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(14.dp),
+                        color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.48f),
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    text = "Linked sources · $entity (${matchingCitations.size})",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                    modifier = Modifier.weight(1f),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                ExpressivePillSurface(
+                                    onClick = { selectedEntity = null },
+                                    modifier = Modifier.size(28.dp),
+                                    restCorner = 14.dp,
+                                    pressedCorner = 8.dp,
+                                    containerColor = androidx.compose.ui.graphics.Color.Transparent,
+                                    pressedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                                    contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    contentDescription = "Clear selected entity",
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Close,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                }
+                            }
+                            if (matchingCitations.isNotEmpty()) {
+                                FlowRow(
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                                ) {
+                                    matchingCitations.forEach { citation ->
+                                        ExpressivePillSurface(
+                                            onClick = { onOpenSource(citation.memoryId) },
+                                            modifier = Modifier.widthIn(max = 280.dp),
+                                            restCorner = 12.dp,
+                                            pressedCorner = 8.dp,
+                                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
+                                            pressedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                                            contentColor = MaterialTheme.colorScheme.onSurface,
+                                            contentDescription = "Open source ${citation.index}",
+                                        ) {
+                                            Text(
+                                                text = "${citation.index} · ${citation.headline}",
+                                                style = MaterialTheme.typography.labelMedium,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
 

@@ -20,7 +20,7 @@ object QueryTokenizer {
         "no", "not", "now", "of", "on", "or", "our", "out", "she", "should", "so", "still",
         "than", "that", "the", "their", "them", "then", "there", "these", "they", "this", "those",
         "to", "up", "us", "was", "we", "were", "what", "when", "where", "which", "while", "who",
-        "whom", "why", "will", "with", "would", "you", "your", "tell", "know", "need", "any",
+        "whom", "why", "will", "with", "would", "you", "your", "tell", "know", "need",
     )
 
     /** Lowercased, stopword-free tokens of at least two characters, in first-seen order. */
@@ -35,7 +35,8 @@ object QueryTokenizer {
 
     /**
      * Minimal Porter-style suffix stripping (step 1 subset). Deliberately conservative: it only
-     * needs to collapse common inflections such as `quoted` / `quoting` / `quotes` -> `quot`.
+     * needs to collapse common inflections such as `quoted` / `quoting` / `quotes` -> `quot` and
+     * `supply` / `supplies` -> `suppli`.
      */
     fun stem(token: String): String {
         var word = token
@@ -43,17 +44,21 @@ object QueryTokenizer {
         word = when {
             word.endsWith("sses") -> word.dropLast(2)
             word.endsWith("ies") -> word.dropLast(3) + "i"
-            word.endsWith("ss") -> word
+            word.endsWith("ss") || word.endsWith("us") || word.endsWith("is") -> word
             word.endsWith("s") && word.length > 3 -> word.dropLast(1)
             else -> word
         }
         word = when {
+            word.endsWith("ied") && word.length > 4 -> word.dropLast(3) + "i"
             word.endsWith("ing") && word.length > 5 -> word.dropLast(3)
             word.endsWith("ed") && word.length > 4 -> word.dropLast(2)
             else -> word
         }
         if (word.endsWith("e") && word.length > 4) {
             word = word.dropLast(1)
+        }
+        if (word.length > 3 && word.endsWith('y') && word.dropLast(1).any { it in "aeiou" }) {
+            word = word.dropLast(1) + "i"
         }
         return word
     }

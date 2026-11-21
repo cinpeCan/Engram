@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Polyline
 import androidx.compose.material.icons.rounded.Replay
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -33,6 +34,7 @@ import androidx.compose.material3.SheetValue
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
@@ -63,16 +65,12 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.cinpe.deponder.compose.DeponderDefaultRubber
 import com.cinpe.deponder.compose.DeponderRubberStyle
+import com.cinpe.deponder.compose.DeponderState
 import com.cinpe.deponder.compose.deponderDrag
 import com.cinpe.deponder.compose.deponderPlanet
 import com.cinpe.deponder.compose.deponderRoot
-import com.cinpe.deponder.compose.rememberDeponderState
 import com.cinpe.deponder.core.DeponderArrowMode
-import com.cinpe.deponder.core.DeponderDefaults
 import com.cinpe.deponder.core.DeponderRubberInsets
-import com.cinpe.deponder.core.PlanetPhysics
-import com.cinpe.deponder.core.RootPhysics
-import com.cinpe.deponder.core.RubberPhysics
 import io.github.cinpecan.engram.ui.components.ExpressivePillSurface
 import io.github.cinpecan.engram.ui.navigation.LocalModalBottomSheetState
 import io.github.cinpecan.engram.ui.viewmodel.EntityCitationState
@@ -80,11 +78,7 @@ import io.github.cinpecan.engram.ui.viewmodel.GraphCanvasState
 import io.github.cinpecan.engram.ui.viewmodel.GraphIntent
 import io.github.cinpecan.engram.ui.viewmodel.GraphNodeUi
 import io.github.cinpecan.engram.ui.viewmodel.GraphViewModel
-import kotlin.math.PI
 import kotlin.math.abs
-import kotlin.math.cos
-import kotlin.math.roundToInt
-import kotlin.math.sin
 import org.koin.compose.viewmodel.koinViewModel
 import org.koin.core.parameter.parametersOf
 
@@ -119,19 +113,8 @@ fun GraphScreen(
     onIntent: (GraphIntent) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val deponderState = rememberDeponderState(
-        physics = buildGraphRootPhysics(widthDp = 360f, heightDp = 300f),
-    )
     val haptic = LocalHapticFeedback.current
     var hasRenderedAnchor by remember { mutableStateOf(false) }
-
-    LaunchedEffect(isSheetExpanded) {
-        if (hasRenderedAnchor) {
-            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-        } else {
-            hasRenderedAnchor = true
-        }
-    }
 
     val lineColor = MaterialTheme.colorScheme.outline
     val labelColor = MaterialTheme.colorScheme.onSurface
@@ -187,29 +170,72 @@ fun GraphScreen(
                 label = "graphCanvasHeight",
             )
 
+            val topology = remember(canvasState.nodes, canvasState.visibleEdges) {
+                analyzeGraphTopology(
+                    nodeIds = canvasState.nodes.map { it.id },
+                    edges = canvasState.visibleEdges.map { it.source to it.target },
+                )
+            }
+
             // Anchor-driven physics & scale (recomputed only on state targets, never per drag frame)
-            val rootPhysics = remember(maxWidth, targetCanvasHeight) {
+            val rootPhysics = remember(maxWidth, targetCanvasHeight, canvasState.isUnfoldEnabled) {
                 buildGraphRootPhysics(
                     widthDp = maxWidth.value,
                     heightDp = targetCanvasHeight.value,
+                    unfoldEnabled = canvasState.isUnfoldEnabled,
                 )
             }
-            val autoScale = remember(maxWidth, targetCanvasHeight, canvasState.nodes.size) {
+            val rubberPhysics = remember(topology.diameterHops, canvasState.isUnfoldEnabled) {
+                buildGraphRubberPhysics(
+                    diameterHops = topology.diameterHops,
+                    unfoldEnabled = canvasState.isUnfoldEnabled,
+                )
+            }
+            val autoScale = remember(
+                maxWidth,
+                targetCanvasHeight,
+                topology.nodeCount,
+                topology.diameterHops,
+                canvasState.isUnfoldEnabled,
+            ) {
                 computeAutoGraphScale(
                     widthDp = maxWidth.value,
                     heightDp = targetCanvasHeight.value,
-                    nodeCount = canvasState.nodes.size,
+                    nodeCount = topology.nodeCount,
+                    diameterHops = topology.diameterHops,
+                    unfoldEnabled = canvasState.isUnfoldEnabled,
                 )
             }
-            val seedRadiusDp = (minOf(maxWidth.value, targetCanvasHeight.value) * 0.21f)
-                .coerceIn(52f, 92f)
-                .dp
 
-            LaunchedEffect(rootPhysics, autoScale, canvasState.memoryId, isSheetExpanded) {
+            val deponderState = remember(canvasState.memoryId) {
+                DeponderState(physics = rootPhysics)
+            }
+            SideEffect {
                 deponderState.updatePhysics(rootPhysics)
                 deponderState.submitScale(autoScale)
+            }
+
+            LaunchedEffect(isSheetExpanded) {
+                if (hasRenderedAnchor) {
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                } else {
+                    hasRenderedAnchor = true
+                }
                 deponderState.reheat()
             }
+
+            val seedOffsets = remember(topology, maxWidth, targetCanvasHeight, density) {
+                computeSeedOffsetsPx(
+                    orderedNodeIds = topology.orderedNodeIds,
+                    diameterHops = topology.diameterHops,
+                    widthPx = with(density) { maxWidth.toPx() },
+                    heightPx = with(density) { targetCanvasHeight.toPx() },
+                )
+            }
+            val showControlLabels = isSheetExpanded &&
+                entityCitation == null &&
+                maxWidth >= 320.dp &&
+                targetCanvasHeight >= 360.dp
 
             val latestNodes = rememberUpdatedState(canvasState.nodes)
             var lastViewportHeightPx by remember(canvasState.memoryId) { mutableFloatStateOf(0f) }
@@ -280,7 +306,7 @@ fun GraphScreen(
                                         } else {
                                             DeponderArrowMode.END
                                         },
-                                        physics = GraphRubberPhysics,
+                                        physics = rubberPhysics,
                                         insets = DeponderRubberInsets.Default,
                                         style = DeponderRubberStyle.of(
                                             lineColor = lineColor,
@@ -294,14 +320,8 @@ fun GraphScreen(
                                 }
                             }
 
-                            val nodeCount = canvasState.nodes.size.coerceAtLeast(1)
-                            val seedRadiusPx = with(density) { seedRadiusDp.toPx() }
-                            canvasState.nodes.forEachIndexed { index, node ->
-                                val angle = (2.0 * PI * index) / nodeCount
-                                val seedOffset = IntOffset(
-                                    x = (cos(angle) * seedRadiusPx).roundToInt(),
-                                    y = (sin(angle) * seedRadiusPx).roundToInt(),
-                                )
+                            canvasState.nodes.forEach { node ->
+                                val seedOffset = seedOffsets[node.id] ?: IntOffset.Zero
                                 key(node.id) {
                                     EntityCapsuleNode(
                                         node = node,
@@ -324,29 +344,44 @@ fun GraphScreen(
                         }
 
                         if (canvasState.nodes.size >= 2) {
-                            ExpressivePillSurface(
-                                onClick = {
-                                    if (canvasState.totalEdgeCount > 1) {
-                                        onIntent(GraphIntent.ReplayGrowth)
-                                    }
-                                    deponderState.reheat()
-                                },
-                                enabled = !canvasState.isReplaying,
+                            Row(
                                 modifier = Modifier
                                     .align(Alignment.BottomEnd)
-                                    .padding(end = 16.dp, bottom = 12.dp)
-                                    .size(36.dp),
-                                restCorner = 18.dp,
-                                pressedCorner = 10.dp,
-                                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.78f),
-                                pressedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                                contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                                contentDescription = "Replay graph layout",
+                                    .padding(end = 16.dp, bottom = 12.dp),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                Icon(
-                                    imageVector = Icons.Rounded.Replay,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(18.dp),
+                                if (canvasState.nodes.size >= 3) {
+                                    AdaptiveGraphActionPill(
+                                        icon = Icons.Rounded.Polyline,
+                                        label = "Unfold",
+                                        showLabel = showControlLabels,
+                                        active = canvasState.isUnfoldEnabled,
+                                        contentDescription = if (canvasState.isUnfoldEnabled) {
+                                            "Disable topological unfold"
+                                        } else {
+                                            "Unfold graph topology"
+                                        },
+                                        onClick = {
+                                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                            onIntent(GraphIntent.ToggleUnfold)
+                                        },
+                                    )
+                                }
+
+                                AdaptiveGraphActionPill(
+                                    icon = Icons.Rounded.Replay,
+                                    label = "Replay",
+                                    showLabel = showControlLabels,
+                                    enabled = !canvasState.isReplaying,
+                                    contentDescription = "Replay graph layout",
+                                    onClick = {
+                                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                        if (canvasState.totalEdgeCount > 1) {
+                                            onIntent(GraphIntent.ReplayGrowth)
+                                        }
+                                        deponderState.reheat()
+                                    },
                                 )
                             }
                         }
@@ -421,56 +456,6 @@ internal fun computeRecenterDeltaYPx(
     if (previousHeightPx <= 0f || newHeightPx <= 0f) return 0f
     val delta = newHeightPx - previousHeightPx
     return if (abs(delta) <= 1f) 0f else delta * 0.5f
-}
-
-internal fun buildGraphRootPhysics(
-    widthDp: Float,
-    heightDp: Float,
-): RootPhysics {
-    val wallRepulsionDp = (minOf(widthDp, heightDp) * 0.34f).coerceIn(98f, 136f)
-    return RootPhysics.fromPreset(DeponderDefaults.Presets.Crisp).copy(
-        airDamping = 2.95f,
-        wallRepulsionDp = wallRepulsionDp,
-        wallElasticityStart = 5.8f,
-        wallElasticityTop = 5.2f,
-        wallElasticityEnd = 5.8f,
-        wallElasticityBottom = 5.2f,
-        minScale = 0.55f,
-        maxScale = 1.25f,
-    ).withUnfold(true)
-}
-
-/**
- * Content-adaptive spring length (Deponder 0.6.0): rest length follows the measured relation label
- * width plus breathing room for both entity capsules and arrowheads, clamped to a readable range.
- */
-internal val GraphRubberPhysics: RubberPhysics = RubberPhysics.auto(
-    contentPaddingDp = 84f,
-    minLengthDp = 132f,
-    maxLengthDp = 188f,
-    elasticity = 6.6f,
-)
-
-internal val GraphPlanetPhysics: PlanetPhysics = PlanetPhysics(
-    mass = 1.65f,
-    repulsionRadiusDp = 148f,
-    elasticity = 4.8f,
-    pinned = false,
-)
-
-internal fun computeAutoGraphScale(
-    widthDp: Float,
-    heightDp: Float,
-    nodeCount: Int,
-): Float {
-    val baseByCount = when {
-        nodeCount <= 3 -> 0.94f
-        nodeCount <= 5 -> 0.84f
-        nodeCount <= 8 -> 0.74f
-        else -> 0.66f
-    }
-    val viewportFactor = (minOf(widthDp, heightDp) / 360f).coerceIn(0.82f, 1.08f)
-    return (baseByCount * viewportFactor).coerceIn(0.60f, 1.02f)
 }
 
 @Composable

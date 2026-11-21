@@ -4,7 +4,8 @@
 -keepattributes *Annotation*,InnerClasses
 -dontnote kotlinx.serialization.SerializationKt
 
-# Preserve Kotlinx Serialization Companions and generated serializers for DTOs and NavKeys
+# Preserve Kotlinx Serialization Companions, generated serializers, and object singletons for DTOs and NavKeys
+-keepattributes RuntimeVisibleAnnotations
 -keepclassmembers class io.github.cinpecan.engram.** {
     *** Companion;
 }
@@ -13,4 +14,10 @@
 }
 -keepclassmembers class io.github.cinpecan.engram.**$serializer {
     *;
+}
+-keep @kotlinx.serialization.Serializable class io.github.cinpecan.engram.ui.navigation.EngramNavKey** {
+    *;
+}
+-keepclassmembers class io.github.cinpecan.engram.ui.navigation.EngramNavKey** {
+    public static final *** INSTANCE;
 }

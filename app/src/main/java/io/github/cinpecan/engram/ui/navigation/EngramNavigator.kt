@@ -84,7 +84,10 @@ class EngramNavigator(
     }
 
     fun openOverlay(overlay: EngramNavKey.Overlay) {
-        if (backStack.lastOrNull() is EngramNavKey.Overlay) {
+        val currentTop = backStack.lastOrNull()
+        val shouldStackOnAnswer = currentTop is EngramNavKey.AnswerSheet &&
+            overlay is EngramNavKey.RawMemorySheet
+        if (currentTop is EngramNavKey.Overlay && !shouldStackOnAnswer) {
             backStack[backStack.lastIndex] = overlay
         } else {
             backStack.add(overlay)

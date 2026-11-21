@@ -342,7 +342,7 @@ private fun resolveStatusBanner(
         is CloudSessionState.Ready -> when {
             !latestNotice.isNullOrBlank() -> StatusBanner(latestNotice, readyBg, readyFg)
             cloudSessionState.remainingQuota != null -> StatusBanner(
-                "Cloud ready · ${cloudSessionState.remainingQuota} distillations left",
+                "Cloud ready · ${cloudSessionState.remainingQuota} requests left",
                 readyBg,
                 readyFg,
             )
