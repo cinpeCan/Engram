@@ -131,18 +131,26 @@ class MemoryRepository(
                 val existingById = store.getAllMemories().associateBy { it.id }
                 val latestSeeds = SeedStorylineProvider.createInitialStoryline()
                 for (seed in latestSeeds) {
-                    val existing = existingById[seed.id]
-                    if (existing != null &&
-                        existing.analysisSource == AnalysisSource.SEED &&
-                        (existing.telemetryBadge.isNotEmpty() || existing.summary != seed.summary)
-                    ) {
+                    val existing = existingById[seed.id] ?: continue
+                    if (existing.analysisSource != AnalysisSource.SEED) continue
+                    if (existing.content != seed.content) {
+                        // Seed storyline changed between releases: fully replace content,
+                        // summary, tags, calendar and relations. Deleted seeds stay deleted
+                        // because they are absent from the store.
+                        store.insertRawMemory(
+                            seed.copy(
+                                createdAtMillis = existing.createdAtMillis,
+                                updatedAtMillis = System.currentTimeMillis(),
+                            ),
+                        )
+                    } else if (existing.telemetryBadge.isNotEmpty() || existing.summary != seed.summary) {
                         store.updateMemoryAnalysis(
                             memoryId = seed.id,
                             payload = MemoryAnalysisPayload(
                                 summary = seed.summary,
                                 tags = seed.tags,
                                 calendarProposal = existing.calendarProposal ?: seed.calendarProposal,
-                                relations = existing.relations.ifEmpty { seed.relations },
+                                relations = seed.relations,
                             ),
                             analysisSource = AnalysisSource.SEED,
                             telemetryBadge = "",
@@ -185,7 +193,7 @@ class MemoryRepository(
             val syncKey = prefs?.syncKey.orEmpty()
 
             _streamingPreviews.update {
-                it + (id to StreamingPreviewState(partialText = "", stageLabel = "准备提炼…"))
+                it + (id to StreamingPreviewState(partialText = "", stageLabel = UnifiedInferenceRouter.STAGE_PREPARING))
             }
             try {
                 inferenceRouter.distillMemory(
@@ -253,7 +261,7 @@ class MemoryRepository(
         serverBaseUrl: String,
         syncKey: String,
     ): Result<SyncResultSummary> = runCatching {
-        val client = syncClient ?: error("未初始化同步客户端")
+        val client = syncClient ?: error("Sync client is not initialized")
         val trimmedKey = syncKey.trim()
         val wireSyncKey = trimmedKey.ifEmpty { EnginePreferences.PLACEHOLDER_SYNC_KEY }.take(64)
         val deletedIds = store.getDeletedTombstones().keys

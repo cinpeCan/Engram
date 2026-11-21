@@ -11,7 +11,24 @@ class AnalysisStreamRequest(BaseModel):
 
     content: str = Field(min_length=1)
     nowIso: str = Field(min_length=10)
-    model: str = Field(min_length=1, default="qwen-turbo")
+    model: str = Field(min_length=1, default="gemini-3.5-flash-lite")
+
+
+class AnswerContext(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1)
+    text: str = Field(min_length=1, max_length=1200)
+    createdAtMillis: int = Field(ge=0)
+
+
+class AnswerStreamRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    question: str = Field(min_length=1, max_length=500)
+    nowIso: str = Field(min_length=10)
+    contexts: list[AnswerContext] = Field(max_length=8)
+    model: str = Field(min_length=1, default="gemini-3.5-flash-lite")
 
 
 class AnalysisStreamChunk(BaseModel):

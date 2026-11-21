@@ -72,9 +72,9 @@ class RawMemoryViewModelTest {
     fun observesRequestedMemoryAndHandlesMissingId() = runTest {
         val m1 = MemoryItem(
             id = "m1",
-            content = "这是未加工的原始记录文本，可能非常长且含密码凭证。",
-            summary = "已留存凭证",
-            tags = listOf("凭证备份"),
+            content = "This is the unprocessed source text, which may be long and contain credentials.",
+            summary = "Credentials saved (see source)",
+            tags = listOf("Credentials"),
             createdAtMillis = 1_000L,
             analysisStatus = MemoryAnalysisStatus.READY,
             calendarProposal = null,

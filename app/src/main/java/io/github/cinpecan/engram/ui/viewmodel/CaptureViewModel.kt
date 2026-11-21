@@ -105,7 +105,7 @@ class CaptureViewModel(
         lastDeletedMemory = memory
         viewModelScope.launch {
             memoryRepository.deleteMemory(memory.id)
-            effectChannel.send(CaptureEffect.ShowUndoDelete("已删除印迹"))
+            effectChannel.send(CaptureEffect.ShowUndoDelete("Memory deleted"))
         }
     }
 
@@ -134,10 +134,10 @@ class CaptureViewModel(
     private fun handleCalendarActionLaunched(result: CaptureIntent.OnCalendarActionLaunched) {
         viewModelScope.launch {
             if (!result.launched) {
-                effectChannel.send(CaptureEffect.ShowMessage("未检测到可用的系统日历应用"))
+                effectChannel.send(CaptureEffect.ShowMessage("No calendar app found"))
             } else if (!result.openedExisting && !result.hasReadPermission) {
                 effectChannel.send(
-                    CaptureEffect.ShowMessage("已打开系统日历草稿（授予日历权限可自动同步添加状态）"),
+                    CaptureEffect.ShowMessage("Opened a calendar draft (grant calendar access to track the saved state)"),
                 )
             }
         }

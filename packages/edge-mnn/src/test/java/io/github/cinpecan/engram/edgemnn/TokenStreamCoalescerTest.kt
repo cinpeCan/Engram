@@ -39,16 +39,16 @@ class TokenStreamCoalescerTest {
     fun flushesRemainingTokensImmediatelyOnCompletion() = runTest {
         val coalescer = TokenStreamCoalescer(windowMs = 32L)
         val upstream = flow {
-            emit("端")
+            emit("on-")
             delay(5)
-            emit("侧")
+            emit("device ")
             delay(5)
-            emit("推理")
+            emit("inference")
         }
 
         val emissions = coalescer.coalesce(upstream).toList()
         assertEquals(1, emissions.size)
-        assertEquals("端侧推理", emissions.single())
+        assertEquals("on-device inference", emissions.single())
         assertTrue(testScheduler.currentTime < 32L)
     }
 }

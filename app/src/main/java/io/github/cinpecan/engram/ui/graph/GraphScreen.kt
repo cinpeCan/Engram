@@ -229,7 +229,7 @@ fun GraphScreen(
                             contentAlignment = Alignment.Center,
                         ) {
                             Text(
-                                text = "该印迹暂未提取到多方实体关系",
+                                text = "No entity relations extracted from this memory yet",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.padding(24.dp),
@@ -341,7 +341,7 @@ fun GraphScreen(
                                 containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.78f),
                                 pressedContainerColor = MaterialTheme.colorScheme.primaryContainer,
                                 contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                                contentDescription = "重播脉络推演",
+                                contentDescription = "Replay graph layout",
                             ) {
                                 Icon(
                                     imageVector = Icons.Rounded.Replay,
@@ -373,7 +373,7 @@ fun GraphScreen(
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 Text(
-                                    text = "实体关联 · ${citation.entityName} (${citation.relatedMemories.size})",
+                                    text = "Linked memories · ${citation.entityName} (${citation.relatedMemories.size})",
                                     style = MaterialTheme.typography.titleSmall,
                                     fontWeight = FontWeight.SemiBold,
                                 )
@@ -385,7 +385,7 @@ fun GraphScreen(
                                     containerColor = Color.Transparent,
                                     pressedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
                                     contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    contentDescription = "关闭实体关联",
+                                    contentDescription = "Close linked memories",
                                 ) {
                                     Icon(
                                         imageVector = Icons.Rounded.Close,

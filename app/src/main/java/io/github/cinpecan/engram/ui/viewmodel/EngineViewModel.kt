@@ -195,16 +195,16 @@ class EngineViewModel(
                 cloudSessionMonitor?.retryVerification()
                 val msg = result.fold(
                     onSuccess = { summary ->
-                        "同步完成 · 拉取 ${summary.pulledCount} 条更新，云端共 ${summary.totalRemoteCount} 条"
+                        "Sync complete · Pulled ${summary.pulledCount} updates, ${summary.totalRemoteCount} in the cloud"
                     },
                     onFailure = { err ->
                         when (err) {
                             is CloudGatewayHttpException -> when (err.statusCode) {
-                                401 -> "已保存配置 · 需填写有效体验码，或配置自定义服务器地址"
-                                429 -> "已保存配置 · 云端体验额度已达上限"
-                                else -> "已保存配置 · 同步服务返回异常（HTTP ${err.statusCode}）"
+                                401 -> "Settings saved · Enter a valid access token or set a custom server URL"
+                                429 -> "Settings saved · Cloud quota reached"
+                                else -> "Settings saved · Sync service error (HTTP ${err.statusCode})"
                             }
-                            else -> "已保存配置，暂未连上同步服务，请检查网络或服务器地址"
+                            else -> "Settings saved · Can't reach the sync service. Check your network or server URL"
                         }
                     },
                 )
@@ -227,20 +227,20 @@ class EngineViewModel(
     private fun loadModel(model: ModelDescriptorDto) {
         val completed = downloadManager.downloadStates.value[model.id] as? ModelDownloadState.Completed
         if (completed == null) {
-            effectChannel.trySend(EngineEffect.ShowMessage("请先下载模型文件"))
+            effectChannel.trySend(EngineEffect.ShowMessage("Download the model first"))
             return
         }
         if (!edgeEngine.isBackendAvailable) {
-            effectChannel.trySend(EngineEffect.ShowMessage("当前运行环境未启用原生推理库"))
+            effectChannel.trySend(EngineEffect.ShowMessage("Native inference runtime is not enabled on this build"))
             return
         }
         viewModelScope.launch {
             val result = edgeEngine.loadModel(model.id, completed.localDirPath)
             val msg = if (result.isSuccess) {
                 preferencesRepository.setSelectedModelId(model.id)
-                "模型已加载就绪"
+                "Model loaded"
             } else {
-                "加载失败：${result.exceptionOrNull()?.message}"
+                "Load failed: ${result.exceptionOrNull()?.message}"
             }
             effectChannel.send(EngineEffect.ShowMessage(msg))
         }
@@ -256,7 +256,7 @@ class EngineViewModel(
             val mb = reclaimedBytes / (1024.0 * 1024.0)
             effectChannel.send(
                 EngineEffect.ShowMessage(
-                    String.format(Locale.US, "已释放模型内存 %.1f MB", mb),
+                    String.format(Locale.US, "Freed %.1f MB of model memory", mb),
                 ),
             )
         }

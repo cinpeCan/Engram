@@ -33,7 +33,7 @@ data class ModelDescriptorDto(
 data class AnalysisStreamRequestDto(
     val content: String,
     val nowIso: String,
-    val model: String = "qwen-turbo",
+    val model: String = "gemini-3.5-flash-lite",
 )
 
 @Serializable

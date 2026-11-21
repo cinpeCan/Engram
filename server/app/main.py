@@ -6,6 +6,8 @@ import inspect
 import json
 import os
 import time
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import AsyncIterator
 
 import httpx
@@ -16,6 +18,7 @@ from google import genai
 from .schemas import (
     AnalysisStreamChunk,
     AnalysisStreamRequest,
+    AnswerStreamRequest,
     AuthStatusResponse,
     MemoryDeleteRequest,
     MemoryDeleteResponse,
@@ -36,20 +39,50 @@ MAX_OUTPUT_TOKENS = 1024
 DEFAULT_VERTEX_LOCATION = "global"
 DEFAULT_VERTEX_MODEL = "gemini-3.5-flash-lite"
 
+MAX_QUESTION_CHARS = 500
+MAX_CONTEXT_CHARS = 1200
+MAX_CONTEXT_BLOCK_CHARS = 6000
+
 _ANALYSIS_SYSTEM_PROMPT = (
-    "你是印迹（Engram）白盒记忆结构化提炼助手。"
-    "请将用户的原始随手记提炼为 JSON 对象，严格匹配以下 schema，不要输出额外解释或 Markdown：\n"
-    '{"summary":"若含多个要点，请分2~3条输出，每行以 \\"• \\" 开头并用 \\\\n 分隔，每条不超过22字，用主谓宾短句直述重点、杜绝长难句；若仅单一简短事项可直接1条短句（不超过24字）；严禁泄露明文密码/口令（统一替换为详见原文）",'
-    '"tags":["场景标签（最多3个，无合适返回[]）"],'
-    '"calendarProposal":{"title":"日程标题","startTimeIso":"YYYY-MM-DDTHH:MM:SS","durationMinutes":60,"location":null},'
-    '"relations":[{"source":"实体A","target":"实体B","relation":"关系标签","bidirectional":false}]}\n'
-    "若无明确时间安排，calendarProposal 返回 null；relations 禁止自环且至多 15 条。"
+    "You are Engram's white-box memory distiller. "
+    "Turn the user's raw note into ONE JSON object that strictly matches this shape. "
+    "Output JSON only: no Markdown, no code fences, no explanations.\n"
+    '{"summary":"• point one\\n• point two",'
+    '"tags":["tag"],'
+    '"calendarProposal":{"title":"Event title","startTimeIso":"YYYY-MM-DDTHH:MM:SS","durationMinutes":60,"location":null},'
+    '"relations":[{"source":"Entity A","target":"Entity B","relation":"label","bidirectional":false}]}\n'
+    "Rules:\n"
+    '- summary: 1-3 bullets, each starting with "• " and separated by \\n; each bullet a short '
+    "subject-verb-object phrase of at most ~12 words. Never reveal plaintext passwords, PINs or "
+    'secrets; write "see source" instead.\n'
+    "- tags: at most 3 short scene tags (each <= 24 characters), or [] when none fit.\n"
+    "- calendarProposal: null unless the note states a concrete schedule. Convert relative times "
+    "(e.g. tomorrow 3pm) into an exact ISO local datetime based on the provided current local time. "
+    "durationMinutes between 5 and 480.\n"
+    "- relations: at most 15 entity triples; source and target must differ (no self-loops); "
+    "entity names <= 32 characters, relation labels <= 24 characters.\n"
+    "- Write the summary, tags and relation labels in the same language as the note."
+)
+
+_ANSWER_SYSTEM_PROMPT = (
+    "You are Engram's memory assistant. Answer the user's question using ONLY the numbered "
+    "memory snippets provided.\n"
+    "Rules:\n"
+    "- Cite sources inline as [1], [2], matching the snippet numbers.\n"
+    "- If the snippets do not contain the answer, say so briefly. Never invent facts.\n"
+    "- Be concise: at most 4 sentences or 4 bullets.\n"
+    "- Never reveal plaintext passwords, PINs or secrets; refer to the cited snippet instead.\n"
+    "- Answer in the same language as the question.\n"
+    "- Output plain text only, not JSON or Markdown headings."
 )
 
 app = FastAPI(
     title="Engram Sync & Cloud Inference Service",
-    version="0.4.0",
-    description="Multi-device memory synchronization and Vertex AI / OpenAI-compatible cloud SSE distillation.",
+    version="0.5.0",
+    description=(
+        "Multi-device memory synchronization plus Vertex AI / OpenAI-compatible cloud SSE "
+        "distillation and grounded memory answers."
+    ),
 )
 
 
@@ -123,31 +156,89 @@ async def delete_memories(
 
 def _build_user_prompt(now_iso: str, content: str) -> str:
     truncated_content = content[:MAX_INPUT_CHARS]
-    return f"当前本地时间：{now_iso}\n原文：{truncated_content}"
+    return f"Current local time: {now_iso}\nNote: {truncated_content}"
 
 
-def _build_analysis_messages(request: AnalysisStreamRequest) -> list[dict[str, str]]:
-    return [
-        {"role": "system", "content": _ANALYSIS_SYSTEM_PROMPT},
-        {"role": "user", "content": _build_user_prompt(request.nowIso, request.content)},
-    ]
+def _snippet_date(created_at_millis: int, now_iso: str) -> str:
+    """Render a snippet date in the client's UTC offset when nowIso carries one, else in UTC."""
+    try:
+        tz = datetime.fromisoformat(now_iso).tzinfo or timezone.utc
+    except ValueError:
+        tz = timezone.utc
+    return datetime.fromtimestamp(created_at_millis / 1000, tz=tz).date().isoformat()
+
+
+def _build_answer_prompt(request: AnswerStreamRequest) -> str:
+    lines: list[str] = []
+    budget = MAX_CONTEXT_BLOCK_CHARS
+    for index, context in enumerate(request.contexts, start=1):
+        if budget <= 0:
+            break
+        text = " ".join(context.text.split())[:MAX_CONTEXT_CHARS][:budget]
+        budget -= len(text)
+        lines.append(f"[{index}] ({_snippet_date(context.createdAtMillis, request.nowIso)}) {text}")
+    snippets = "\n".join(lines) if lines else "(no memory snippets)"
+    question = request.question[:MAX_QUESTION_CHARS]
+    return f"Current local time: {request.nowIso}\nMemory snippets:\n{snippets}\n\nQuestion: {question}"
 
 
 def _create_vertex_client(project: str, location: str) -> genai.Client:
     return genai.Client(vertexai=True, project=project, location=location)
 
 
-async def _stream_vertex_analysis(
-    request: AnalysisStreamRequest,
+@dataclass(frozen=True)
+class _QuotaReservation:
+    tenant_id: str
+    bucket: str
+    estimated_cost_usd: float
+
+    def refund(self) -> None:
+        refund_demo_quota(self.tenant_id, self.bucket, self.estimated_cost_usd)
+
+
+@dataclass(frozen=True)
+class _Backend:
+    model_name: str
+    vertex_project: str = ""
+    vertex_location: str = ""
+    base_url: str = ""
+    api_key: str = ""
+
+
+def _sse_frame(
+    model_name: str,
+    start_time: float,
+    delta: str = "",
+    done: bool = False,
+    error: str | None = None,
+) -> str:
+    chunk = AnalysisStreamChunk(
+        delta=delta,
+        done=done,
+        model=model_name,
+        latencyMs=int((time.perf_counter() - start_time) * 1000),
+        error=error,
+    )
+    return f"data: {chunk.model_dump_json()}\n\n"
+
+
+def _sse_failure(model_name: str, start_time: float) -> list[str]:
+    return [_sse_frame(model_name, start_time, done=True, error="Upstream request failed"), "data: [DONE]\n\n"]
+
+
+def _sse_success(model_name: str, start_time: float) -> list[str]:
+    return [_sse_frame(model_name, start_time, done=True), "data: [DONE]\n\n"]
+
+
+async def _stream_vertex_text(
+    system_prompt: str,
+    user_prompt: str,
     project: str,
     location: str,
     model_name: str,
     start_time: float,
-    quota_tenant_id: str | None = None,
-    quota_bucket: str | None = None,
-    estimated_cost_usd: float = 0.0,
+    quota: _QuotaReservation | None = None,
 ) -> AsyncIterator[str]:
-    user_prompt = _build_user_prompt(request.nowIso, request.content)
     generation_config = {
         "max_output_tokens": MAX_OUTPUT_TOKENS,
         "thinking_level": "minimal" if "flash-lite" in model_name else "low",
@@ -159,7 +250,7 @@ async def _stream_vertex_analysis(
         created = client.aio.interactions.create(
             model=model_name,
             input=user_prompt,
-            system_instruction=_ANALYSIS_SYSTEM_PROMPT,
+            system_instruction=system_prompt,
             generation_config=generation_config,
             stream=True,
             store=False,
@@ -174,52 +265,35 @@ async def _stream_vertex_analysis(
                 continue
             delta_text = getattr(delta, "text", None) or ""
             if delta_text:
-                chunk = AnalysisStreamChunk(
-                    delta=delta_text,
-                    done=False,
-                    model=model_name,
-                    latencyMs=int((time.perf_counter() - start_time) * 1000),
-                )
-                yield f"data: {chunk.model_dump_json()}\n\n"
+                yield _sse_frame(model_name, start_time, delta=delta_text)
     except Exception:
-        if not stream_established and quota_tenant_id and quota_bucket:
-            refund_demo_quota(quota_tenant_id, quota_bucket, estimated_cost_usd)
-        err_chunk = AnalysisStreamChunk(
-            delta="",
-            done=True,
-            model=model_name,
-            latencyMs=int((time.perf_counter() - start_time) * 1000),
-            error="Upstream request failed",
-        )
-        yield f"data: {err_chunk.model_dump_json()}\n\n"
-        yield "data: [DONE]\n\n"
+        if not stream_established and quota is not None:
+            quota.refund()
+        for frame in _sse_failure(model_name, start_time):
+            yield frame
         return
 
-    final_chunk = AnalysisStreamChunk(
-        delta="",
-        done=True,
-        model=model_name,
-        latencyMs=int((time.perf_counter() - start_time) * 1000),
-    )
-    yield f"data: {final_chunk.model_dump_json()}\n\n"
-    yield "data: [DONE]\n\n"
+    for frame in _sse_success(model_name, start_time):
+        yield frame
 
 
-async def _stream_upstream_analysis(
-    request: AnalysisStreamRequest,
+async def _stream_upstream_text(
+    system_prompt: str,
+    user_prompt: str,
     base_url: str,
     api_key: str,
     model_name: str,
     start_time: float,
-    quota_tenant_id: str | None = None,
-    quota_bucket: str | None = None,
-    estimated_cost_usd: float = 0.0,
+    quota: _QuotaReservation | None = None,
 ) -> AsyncIterator[str]:
     payload = {
         "model": model_name,
         "stream": True,
         "max_tokens": MAX_OUTPUT_TOKENS,
-        "messages": _build_analysis_messages(request),
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
     }
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -245,35 +319,96 @@ async def _stream_upstream_analysis(
                         continue
                     delta_text = (choices[0].get("delta") or {}).get("content") or ""
                     if delta_text:
-                        chunk = AnalysisStreamChunk(
-                            delta=delta_text,
-                            done=False,
-                            model=model_name,
-                            latencyMs=int((time.perf_counter() - start_time) * 1000),
-                        )
-                        yield f"data: {chunk.model_dump_json()}\n\n"
+                        yield _sse_frame(model_name, start_time, delta=delta_text)
     except httpx.HTTPError:
-        if not stream_established and quota_tenant_id and quota_bucket:
-            refund_demo_quota(quota_tenant_id, quota_bucket, estimated_cost_usd)
-        err_chunk = AnalysisStreamChunk(
-            delta="",
-            done=True,
-            model=model_name,
-            latencyMs=int((time.perf_counter() - start_time) * 1000),
-            error="Upstream request failed",
-        )
-        yield f"data: {err_chunk.model_dump_json()}\n\n"
-        yield "data: [DONE]\n\n"
+        if not stream_established and quota is not None:
+            quota.refund()
+        for frame in _sse_failure(model_name, start_time):
+            yield frame
         return
 
-    final_chunk = AnalysisStreamChunk(
-        delta="",
-        done=True,
-        model=model_name,
-        latencyMs=int((time.perf_counter() - start_time) * 1000),
+    for frame in _sse_success(model_name, start_time):
+        yield frame
+
+
+def _resolve_backend(request_model: str) -> _Backend:
+    """Vertex AI (ADC) when GOOGLE_CLOUD_PROJECT is set, else an OpenAI-compatible gateway; 503 if neither."""
+    gcp_project = os.getenv("GOOGLE_CLOUD_PROJECT", "").strip()
+    if gcp_project:
+        return _Backend(
+            model_name=os.getenv("ENGRAM_VERTEX_MODEL", DEFAULT_VERTEX_MODEL).strip() or DEFAULT_VERTEX_MODEL,
+            vertex_project=gcp_project,
+            vertex_location=os.getenv("GOOGLE_CLOUD_LOCATION", DEFAULT_VERTEX_LOCATION).strip()
+            or DEFAULT_VERTEX_LOCATION,
+        )
+    api_key = os.getenv("ENGRAM_CLOUD_API_KEY", "").strip()
+    if not api_key:
+        raise HTTPException(status_code=503, detail="ENGRAM_CLOUD_API_KEY is not configured")
+    base_url = os.getenv("ENGRAM_CLOUD_BASE_URL", "").strip()
+    if not base_url:
+        raise HTTPException(status_code=503, detail="ENGRAM_CLOUD_BASE_URL is not configured")
+    return _Backend(
+        model_name=os.getenv("ENGRAM_CLOUD_MODEL", "").strip() or request_model,
+        base_url=base_url,
+        api_key=api_key,
     )
-    yield f"data: {final_chunk.model_dump_json()}\n\n"
-    yield "data: [DONE]\n\n"
+
+
+def _reserve_quota(claims) -> _QuotaReservation | None:
+    if claims is None:
+        return None
+    max_per_token = int(os.getenv("ENGRAM_DEMO_MAX_REQUESTS_PER_TOKEN", "50"))
+    monthly_cap_usd = float(os.getenv("ENGRAM_MONTHLY_HARD_CAP_USD", "5.0"))
+    est_cost_usd = float(os.getenv("ENGRAM_ESTIMATED_COST_PER_REQ_USD", "0.0004"))
+    allowed, detail, reserved_bucket = try_acquire_demo_quota(
+        tenant_id=claims.tenant_id,
+        max_requests_per_token=max_per_token,
+        monthly_hard_cap_usd=monthly_cap_usd,
+        estimated_cost_usd=est_cost_usd,
+    )
+    if not allowed:
+        raise HTTPException(status_code=429, detail=detail)
+    return _QuotaReservation(tenant_id=claims.tenant_id, bucket=reserved_bucket, estimated_cost_usd=est_cost_usd)
+
+
+def _stream_completion(
+    authorization: str | None,
+    system_prompt: str,
+    user_prompt: str,
+    request_model: str,
+) -> StreamingResponse:
+    """Shared pipeline: auth (401) -> backend resolution (503) -> quota reservation (429) -> SSE."""
+    claims = require_demo_claims_if_enabled(authorization)
+    backend = _resolve_backend(request_model)
+    quota = _reserve_quota(claims)
+
+    start_time = time.perf_counter()
+    if backend.vertex_project:
+        generator = _stream_vertex_text(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            project=backend.vertex_project,
+            location=backend.vertex_location,
+            model_name=backend.model_name,
+            start_time=start_time,
+            quota=quota,
+        )
+    else:
+        generator = _stream_upstream_text(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            base_url=backend.base_url,
+            api_key=backend.api_key,
+            model_name=backend.model_name,
+            start_time=start_time,
+            quota=quota,
+        )
+
+    return StreamingResponse(
+        generator,
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.post("/api/v1/analyze/stream")
@@ -281,65 +416,23 @@ async def analyze_stream(
     request: AnalysisStreamRequest,
     authorization: str | None = Header(default=None),
 ) -> StreamingResponse:
-    claims = require_demo_claims_if_enabled(authorization)
+    return _stream_completion(
+        authorization=authorization,
+        system_prompt=_ANALYSIS_SYSTEM_PROMPT,
+        user_prompt=_build_user_prompt(request.nowIso, request.content),
+        request_model=request.model,
+    )
 
-    gcp_project = os.getenv("GOOGLE_CLOUD_PROJECT", "").strip()
-    if gcp_project:
-        gcp_location = os.getenv("GOOGLE_CLOUD_LOCATION", DEFAULT_VERTEX_LOCATION).strip() or DEFAULT_VERTEX_LOCATION
-        vertex_model = os.getenv("ENGRAM_VERTEX_MODEL", DEFAULT_VERTEX_MODEL).strip() or DEFAULT_VERTEX_MODEL
-    else:
-        api_key = os.getenv("ENGRAM_CLOUD_API_KEY", "").strip()
-        if not api_key:
-            raise HTTPException(status_code=503, detail="ENGRAM_CLOUD_API_KEY is not configured")
-        base_url = os.getenv("ENGRAM_CLOUD_BASE_URL", "").strip()
-        if not base_url:
-            raise HTTPException(status_code=503, detail="ENGRAM_CLOUD_BASE_URL is not configured")
-        cloud_model = os.getenv("ENGRAM_CLOUD_MODEL", "").strip() or request.model
 
-    quota_tenant_id: str | None = None
-    quota_bucket: str | None = None
-    est_cost_usd = 0.0
-    if claims is not None:
-        max_per_token = int(os.getenv("ENGRAM_DEMO_MAX_REQUESTS_PER_TOKEN", "50"))
-        monthly_cap_usd = float(os.getenv("ENGRAM_MONTHLY_HARD_CAP_USD", "5.0"))
-        est_cost_usd = float(os.getenv("ENGRAM_ESTIMATED_COST_PER_REQ_USD", "0.0004"))
-        allowed, detail, reserved_bucket = try_acquire_demo_quota(
-            tenant_id=claims.tenant_id,
-            max_requests_per_token=max_per_token,
-            monthly_hard_cap_usd=monthly_cap_usd,
-            estimated_cost_usd=est_cost_usd,
-        )
-        if not allowed:
-            raise HTTPException(status_code=429, detail=detail)
-        quota_tenant_id = claims.tenant_id
-        quota_bucket = reserved_bucket
-
-    start_time = time.perf_counter()
-    if gcp_project:
-        generator = _stream_vertex_analysis(
-            request=request,
-            project=gcp_project,
-            location=gcp_location,
-            model_name=vertex_model,
-            start_time=start_time,
-            quota_tenant_id=quota_tenant_id,
-            quota_bucket=quota_bucket,
-            estimated_cost_usd=est_cost_usd,
-        )
-    else:
-        generator = _stream_upstream_analysis(
-            request=request,
-            base_url=base_url,
-            api_key=api_key,
-            model_name=cloud_model,
-            start_time=start_time,
-            quota_tenant_id=quota_tenant_id,
-            quota_bucket=quota_bucket,
-            estimated_cost_usd=est_cost_usd,
-        )
-
-    return StreamingResponse(
-        generator,
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+@app.post("/api/v1/answer/stream")
+async def answer_stream(
+    request: AnswerStreamRequest,
+    authorization: str | None = Header(default=None),
+) -> StreamingResponse:
+    """Grounded answer over on-device retrieved memory snippets (GraphRAG "Ask"), cited as [n]."""
+    return _stream_completion(
+        authorization=authorization,
+        system_prompt=_ANSWER_SYSTEM_PROMPT,
+        user_prompt=_build_answer_prompt(request),
+        request_model=request.model,
     )

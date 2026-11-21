@@ -8,12 +8,14 @@ import io.github.cinpecan.engram.data.preferences.EnginePreferencesRepository
 import io.github.cinpecan.engram.data.remote.CloudSseClient
 import io.github.cinpecan.engram.data.repository.MemoryRepository
 import io.github.cinpecan.engram.data.repository.UnifiedInferenceRouter
+import io.github.cinpecan.engram.data.seed.SeedStorylineProvider
 import io.github.cinpecan.engram.domain.analyzer.MemoryAnalyzer
 import io.github.cinpecan.engram.domain.model.AnalysisSource
 import io.github.cinpecan.engram.domain.model.CalendarProposal
 import io.github.cinpecan.engram.domain.model.MemoryAnalysisPayload
 import io.github.cinpecan.engram.domain.model.MemoryAnalysisStatus
 import io.github.cinpecan.engram.domain.model.MemoryItem
+import io.github.cinpecan.engram.domain.model.RelationTriple
 import io.github.cinpecan.engram.edgemnn.EdgeAiEngine
 import io.github.cinpecan.engram.edgemnn.EngineState
 import io.github.cinpecan.engram.edgemnn.InferenceTelemetry
@@ -64,7 +66,7 @@ class CaptureViewModelTest {
             items.map { emptyList() }
 
         override suspend fun insertRawMemory(item: MemoryItem) {
-            items.value = listOf(item) + items.value
+            items.value = listOf(item) + items.value.filterNot { it.id == item.id }
         }
 
         override suspend fun updateMemoryAnalysis(
@@ -159,11 +161,11 @@ class CaptureViewModelTest {
         val repo = MemoryRepository(store, buildRouter())
         val vm = CaptureViewModel(repo)
 
-        vm.onIntent(CaptureIntent.UpdateInput("测试草稿"))
-        assertEquals("测试草稿", vm.inputText.value)
+        vm.onIntent(CaptureIntent.UpdateInput("Test draft"))
+        assertEquals("Test draft", vm.inputText.value)
 
-        vm.onIntent(CaptureIntent.FillSample("示例内容"))
-        assertEquals("示例内容", vm.inputText.value)
+        vm.onIntent(CaptureIntent.FillSample("Sample content"))
+        assertEquals("Sample content", vm.inputText.value)
     }
 
     @Test
@@ -180,13 +182,13 @@ class CaptureViewModelTest {
             vm.memories.collect {}
         }
 
-        vm.onIntent(CaptureIntent.UpdateInput("和陈工确认柔性屏采购交期"))
+        vm.onIntent(CaptureIntent.UpdateInput("Confirm the Micro-OLED delivery date with Liam Chen"))
         vm.onIntent(CaptureIntent.SubmitCapture)
 
         val readyList = withTimeout(5_000L) {
             vm.memories.first { list ->
                 list.any {
-                    it.content == "和陈工确认柔性屏采购交期" &&
+                    it.content == "Confirm the Micro-OLED delivery date with Liam Chen" &&
                         it.analysisStatus == MemoryAnalysisStatus.READY
                 }
             }
@@ -194,7 +196,7 @@ class CaptureViewModelTest {
 
         assertEquals("", vm.inputText.value)
         assertFalse(vm.isSubmitting.value)
-        val saved = readyList.first { it.content == "和陈工确认柔性屏采购交期" }
+        val saved = readyList.first { it.content == "Confirm the Micro-OLED delivery date with Liam Chen" }
         assertEquals(MemoryAnalysisStatus.READY, saved.analysisStatus)
         assertEquals(AnalysisSource.LOCAL_RULE_FALLBACK, saved.analysisSource)
         assertTrue(vm.streamingPreviews.value.isEmpty())
@@ -203,16 +205,16 @@ class CaptureViewModelTest {
     @Test
     fun calendarStateReactsToSystemProviderWithoutOptimisticWrites() = runTest {
         val proposal = CalendarProposal(
-            title = "固件验收会议",
+            title = "Firmware sign-off meeting",
             startTimeIso = "2026-11-18T10:30:00",
             durationMinutes = 60,
-            location = "5号楼会议室",
+            location = "Building A, Room 501",
         )
         val seed = MemoryItem(
             id = "mem-cal-1",
-            content = "明天上午10:30在5号楼会议室开固件验收会议",
-            summary = "明日 10:30 固件验收会议",
-            tags = listOf("日程提醒"),
+            content = "Tomorrow at 10:30 AM in Building A, Room 501: firmware sign-off meeting",
+            summary = "Tomorrow 10:30 AM · Firmware sign-off meeting",
+            tags = listOf("Follow-up"),
             createdAtMillis = 1_000L,
             analysisStatus = MemoryAnalysisStatus.READY,
             calendarProposal = proposal,
@@ -277,7 +279,7 @@ class CaptureViewModelTest {
                 hasReadPermission = false,
             ),
         )
-        assertEquals(CaptureEffect.ShowMessage("未检测到可用的系统日历应用"), vm.effects.first())
+        assertEquals(CaptureEffect.ShowMessage("No calendar app found"), vm.effects.first())
 
         // Permission signal propagates
         vm.onIntent(CaptureIntent.OnCalendarPermissionResult(granted = true))
@@ -313,7 +315,7 @@ class CaptureViewModelTest {
         val firstCard = initialMemories.first()
         vm.onIntent(CaptureIntent.DeleteMemory(firstCard))
         val undoEffect = vm.effects.first() as CaptureEffect.ShowUndoDelete
-        assertEquals("已删除印迹", undoEffect.message)
+        assertEquals("Memory deleted", undoEffect.message)
         withTimeout(2_000L) { vm.memories.first { it.size == 2 } }
 
         vm.onIntent(CaptureIntent.UndoDeleteMemory)
@@ -326,5 +328,51 @@ class CaptureViewModelTest {
         withTimeout(2_000L) { vm.memories.first { it.isEmpty() } }
         repo.initializeAndSeedIfNeeded()
         assertEquals(0, store.countMemories())
+    }
+
+    @Test
+    fun legacySeedContentIsFullyReplacedButDeletedSeedsStayDeleted() = runTest {
+        val legacySeed = MemoryItem(
+            id = "seed-2",
+            content = "Legacy seed note",
+            summary = "Legacy summary",
+            tags = listOf("Legacy"),
+            createdAtMillis = 42L,
+            analysisStatus = MemoryAnalysisStatus.READY,
+            calendarProposal = null,
+            calendarSaved = false,
+            relations = listOf(RelationTriple("seed-2_r0", "seed-2", "Old A", "Old B", "stale edge")),
+            analysisSource = AnalysisSource.SEED,
+        )
+        val userNote = MemoryItem(
+            id = "mem_user",
+            content = "User note",
+            summary = "User note",
+            tags = emptyList(),
+            createdAtMillis = 50L,
+            analysisStatus = MemoryAnalysisStatus.READY,
+            calendarProposal = null,
+            calendarSaved = false,
+            relations = emptyList(),
+        )
+        // seed-1 and seed-3 were deleted by the user (absent from the store).
+        val store = FakeStore(listOf(legacySeed, userNote))
+        val repo = MemoryRepository(
+            store = store,
+            inferenceRouter = buildRouter(),
+            backgroundScope = backgroundScope,
+        )
+        repo.initializeAndSeedIfNeeded()
+
+        val all = store.getAllMemories()
+        assertEquals(setOf("seed-2", "mem_user"), all.map { it.id }.toSet())
+        val migrated = all.first { it.id == "seed-2" }
+        val expected = SeedStorylineProvider.createInitialStoryline().first { it.id == "seed-2" }
+        assertEquals(expected.content, migrated.content)
+        assertEquals(expected.summary, migrated.summary)
+        assertEquals(expected.tags, migrated.tags)
+        assertEquals(expected.relations.map { it.source to it.target }, migrated.relations.map { it.source to it.target })
+        assertEquals(42L, migrated.createdAtMillis)
+        assertEquals(AnalysisSource.SEED, migrated.analysisSource)
     }
 }

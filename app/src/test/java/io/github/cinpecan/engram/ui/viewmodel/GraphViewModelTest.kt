@@ -82,28 +82,28 @@ class GraphViewModelTest {
     fun bindsSingleMemorySelectsEntityAndReplaysGrowth() = runTest {
         val m1 = MemoryItem(
             id = "m1",
-            content = "老李向张姐提交合同草案，张姐反馈给王总",
-            summary = "• 老李向张姐提交合同草案\n• 张姐反馈给王总",
-            tags = listOf("商务合同"),
+            content = "Marcus Cole sent the contract draft to Sarah Jenkins, who briefed Elena Vance",
+            summary = "• Marcus sent the contract draft to Sarah\n• Sarah briefed Elena",
+            tags = listOf("Legal"),
             createdAtMillis = 2_000L,
             analysisStatus = MemoryAnalysisStatus.READY,
             calendarProposal = null,
             calendarSaved = false,
             relations = listOf(
-                RelationTriple("r1", "m1", "老李", "张姐", "提交草案", false),
-                RelationTriple("r2", "m1", "张姐", "王总", "同步进展", false),
+                RelationTriple("r1", "m1", "Marcus Cole", "Sarah Jenkins", "sent draft", false),
+                RelationTriple("r2", "m1", "Sarah Jenkins", "Elena Vance", "briefs", false),
             ),
         )
         val m2 = MemoryItem(
             id = "m2",
-            content = "陈工向刘敏提交验收单",
-            summary = "陈工提交验收单",
-            tags = listOf("项目推进"),
+            content = "Liam Chen submitted the sign-off to Priya Nair",
+            summary = "Liam submitted the sign-off",
+            tags = listOf("Supply chain"),
             createdAtMillis = 1_500L,
             analysisStatus = MemoryAnalysisStatus.READY,
             calendarProposal = null,
             calendarSaved = false,
-            relations = listOf(RelationTriple("r3", "m2", "陈工", "刘敏", "验收", false)),
+            relations = listOf(RelationTriple("r3", "m2", "Liam Chen", "Priya Nair", "submits sign-off", false)),
         )
 
         val store = FakeStore(listOf(m1, m2))
@@ -120,15 +120,15 @@ class GraphViewModelTest {
 
         val state = vm.canvasState.first { it.nodes.isNotEmpty() }
         assertEquals("m1", state.memoryId)
-        assertEquals(setOf("老李", "张姐", "王总"), state.nodes.map { it.id }.toSet())
+        assertEquals(setOf("Marcus Cole", "Sarah Jenkins", "Elena Vance"), state.nodes.map { it.id }.toSet())
         assertEquals(2, state.totalEdgeCount)
         assertNull(vm.entityCitation.value)
 
-        vm.onIntent(GraphIntent.SelectEntity("张姐"))
+        vm.onIntent(GraphIntent.SelectEntity("Sarah Jenkins"))
         val citation = withTimeout(3_000L) {
             vm.entityCitation.first { it != null }
         }
-        assertEquals("张姐", citation?.entityName)
+        assertEquals("Sarah Jenkins", citation?.entityName)
         assertEquals(listOf("m1"), citation?.relatedMemories?.map { it.id })
 
         vm.onIntent(GraphIntent.ClearSelectedEntity)

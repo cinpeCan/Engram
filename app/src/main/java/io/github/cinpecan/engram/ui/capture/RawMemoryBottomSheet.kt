@@ -52,7 +52,7 @@ fun RawMemoryRoute(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     RawMemorySheetContent(
         uiState = uiState,
-        onCopied = { navigator.showMessage("已复制原文到剪贴板") },
+        onCopied = { navigator.showMessage("Source copied to clipboard") },
         modifier = modifier,
     )
 }
@@ -82,7 +82,7 @@ fun RawMemorySheetContent(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 Text(
-                    text = "未找到对应的印迹原文",
+                    text = "Source note not found",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(vertical = 24.dp),
@@ -105,12 +105,12 @@ fun RawMemorySheetContent(
                 ) {
                     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         Text(
-                            text = "原始印迹",
+                            text = "Source note",
                             style = MaterialTheme.typography.titleMedium,
                             color = MaterialTheme.colorScheme.onSurface,
                         )
                         Text(
-                            text = "${formatFullTimestamp(memory.createdAtMillis)} · ${memory.content.length} 字",
+                            text = "${formatFullTimestamp(memory.createdAtMillis)} · ${memory.content.length} chars",
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -128,7 +128,7 @@ fun RawMemorySheetContent(
                         containerColor = Color.Transparent,
                         pressedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
                         contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                        contentDescription = "复制原文",
+                        contentDescription = "Copy source",
                     ) {
                         Icon(
                             imageVector = Icons.Rounded.ContentCopy,

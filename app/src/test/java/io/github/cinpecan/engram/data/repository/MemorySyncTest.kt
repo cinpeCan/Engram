@@ -127,9 +127,9 @@ class MemorySyncTest {
         )
         val localNote = MemoryItem(
             id = "mem_local",
-            content = "本地录入笔记",
-            summary = "本地提炼摘要",
-            tags = listOf("项目推进"),
+            content = "Local note",
+            summary = "Local summary",
+            tags = listOf("Supply chain"),
             createdAtMillis = 2_000L,
             analysisStatus = MemoryAnalysisStatus.READY,
             calendarProposal = null,
@@ -149,9 +149,9 @@ class MemorySyncTest {
             memories = listOf(
                 SyncMemoryItemDto(
                     id = "mem_local",
-                    content = "本地录入笔记",
-                    summary = "本地提炼摘要",
-                    tags = listOf("项目推进"),
+                    content = "Local note",
+                    summary = "Local summary",
+                    tags = listOf("Supply chain"),
                     createdAtMillis = 2_000L,
                     updatedAtMillis = 2_000L,
                     analysisStatus = "READY",
@@ -163,9 +163,9 @@ class MemorySyncTest {
                 ),
                 SyncMemoryItemDto(
                     id = "mem_remote",
-                    content = "另一台手机录的备忘",
-                    summary = "另一台手机录的备忘",
-                    tags = listOf("日程提醒"),
+                    content = "Memo from another phone",
+                    summary = "Memo from another phone",
+                    tags = listOf("Follow-up"),
                     createdAtMillis = 3_000L,
                     updatedAtMillis = 3_100L,
                     analysisStatus = "READY",
@@ -174,7 +174,7 @@ class MemorySyncTest {
                     analysisSource = "CLOUD_SSE",
                     telemetryBadge = "Cloud SSE · TTFT 90ms",
                     relations = listOf(
-                        SyncRelationTripleDto("老李", "张姐", "对齐条款", bidirectional = true),
+                        SyncRelationTripleDto("Marcus Cole", "Sarah Jenkins", "aligns clauses", bidirectional = true),
                     ),
                 ),
             ),
@@ -281,8 +281,8 @@ class MemorySyncTest {
     fun deletedTombstonePushesRemoteDeleteAndBlocksZombieResurrection() = runTest {
         val deletedNote = MemoryItem(
             id = "mem_deleted",
-            content = "将被删除的记录",
-            summary = "将被删除的记录",
+            content = "Record to be deleted",
+            summary = "Record to be deleted",
             tags = emptyList(),
             createdAtMillis = 1_000L,
             analysisStatus = MemoryAnalysisStatus.READY,
@@ -315,8 +315,8 @@ class MemorySyncTest {
                             memories = listOf(
                                 SyncMemoryItemDto(
                                     id = "mem_deleted",
-                                    content = "将被删除的记录",
-                                    summary = "将被删除的记录",
+                                    content = "Record to be deleted",
+                                    summary = "Record to be deleted",
                                     tags = emptyList(),
                                     createdAtMillis = 1_000L,
                                     updatedAtMillis = 1_500L,

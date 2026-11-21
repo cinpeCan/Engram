@@ -12,6 +12,7 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
 import java.time.temporal.TemporalAdjusters
+import java.util.Locale
 import kotlin.math.roundToLong
 import kotlinx.serialization.json.Json
 
@@ -26,12 +27,19 @@ class MemoryAnalyzer(
 
     fun buildAnalysisPrompt(content: String, nowMillis: Long = System.currentTimeMillis()): String {
         val nowLocal = LocalDateTime.ofInstant(Instant.ofEpochMilli(nowMillis), zoneId)
-        val formattedNow = nowLocal.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm (EEEE)"))
+        val formattedNow = nowLocal.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm (EEEE)", Locale.US))
         return """
-            你是印迹（Engram）白盒记忆助手。当前本地时间：$formattedNow。
-            请将用户的原始随手记提炼为 1~3条精炼分点要点（多要点每行以 "• " 开头并用 \n 分隔，单条不超过22字，杜绝长难句，勿暴露明文密码口令），并提取场景标签（无合适分类返回 []）、日程提议（若含"1小时后"等相对时间请换算为精确ISO时间）及实体关系三元组，仅输出 JSON_SCHEMA：
-            {"summary":"• 要点一\n• 要点二","tags":["场景标签"],"calendarProposal":{"title":"日程事项","startTimeIso":"YYYY-MM-DDTHH:MM:SS","durationMinutes":30,"location":null},"relations":[{"source":"","target":"","relation":"","bidirectional":false}]}
-            原文：$content
+            You are Engram, a white-box memory assistant. Current local time: $formattedNow.
+            Distill the user's note and output JSON only, matching this schema exactly:
+            {"summary":"• First point\n• Second point","tags":["Tag"],"calendarProposal":{"title":"Event title","startTimeIso":"YYYY-MM-DDTHH:MM:SS","durationMinutes":30,"location":null},"relations":[{"source":"","target":"","relation":"","bidirectional":false}]}
+            Rules:
+            - summary: 1-3 bullets, each starting with "• " and separated by \n; each bullet at most 12 words, concise subject-verb-object.
+            - Never reveal plaintext passwords, PINs or secrets; write "see source" instead.
+            - tags: at most 3 short scene tags, or [] if none fit.
+            - calendarProposal: null unless the note describes a schedulable event. Convert relative times ("in 2 hours", "tomorrow 3pm") into an exact ISO local datetime.
+            - relations: at most 15 entity triples; source and target must differ.
+            - Write the summary, tags and relation labels in the same language as the note.
+            Note: $content
         """.trimIndent()
     }
 
@@ -60,27 +68,32 @@ class MemoryAnalyzer(
         )
     }
 
+    /**
+     * Normalizes free-form model or rule output into at most four concise points.
+     * Splits on newlines and sentence punctuation while keeping decimals and clock
+     * times such as `3:00` or `10.5` intact.
+     */
     internal fun normalizeBulletSummary(rawSummary: String): String {
         if (rawSummary.isBlank()) return ""
-        val rawSegments = rawSummary
-            .replace("\r\n", "\n")
-            .split('\n', '；', ';', '。', '！', '？')
+        val rawSegments = SENTENCE_SPLIT_REGEX.split(rawSummary.replace("\r\n", "\n"))
             .map { segment ->
                 BULLET_PREFIX_REGEX.replace(segment.trim(), "")
-                    .trim(' ', '\t', '，', ',', '、', '•', '·')
+                    .trim(' ', '\t', ',', '，', '、', '•', '·')
+                    .trimEnd('.')
+                    .trim()
             }
             .filter { it.isNotBlank() }
 
         val concisePoints = ArrayList<String>(4)
         for (segment in rawSegments) {
-            if (segment.length > 28 && (segment.contains('，') || segment.contains(','))) {
-                val subClauses = segment.split('，', ',')
+            if (segment.length > MAX_BULLET_CHARS && (segment.contains(", ") || segment.contains('，'))) {
+                val subClauses = segment.split(", ", "，")
                     .map { it.trim() }
                     .filter { it.isNotBlank() }
                 var carry = ""
                 for (clause in subClauses) {
-                    val combined = if (carry.isEmpty()) clause else "$carry，$clause"
-                    if (combined.length < 6) {
+                    val combined = if (carry.isEmpty()) clause else "$carry, $clause"
+                    if (combined.length < MIN_CLAUSE_CHARS) {
                         carry = combined
                     } else {
                         concisePoints += combined
@@ -88,9 +101,9 @@ class MemoryAnalyzer(
                     }
                 }
                 if (carry.isNotBlank()) {
-                    if (concisePoints.isNotEmpty() && carry.length < 8) {
+                    if (concisePoints.isNotEmpty() && carry.length < MIN_CLAUSE_CHARS) {
                         val lastIdx = concisePoints.lastIndex
-                        concisePoints[lastIdx] = "${concisePoints[lastIdx]}，$carry"
+                        concisePoints[lastIdx] = "${concisePoints[lastIdx]}, $carry"
                     } else {
                         concisePoints += carry
                     }
@@ -108,8 +121,8 @@ class MemoryAnalyzer(
 
         return when {
             capped.isEmpty() -> ""
-            capped.size == 1 -> capped[0].take(60)
-            else -> capped.joinToString("\n") { "• ${it.take(36)}" }.take(260)
+            capped.size == 1 -> clipAtWord(capped[0], MAX_SINGLE_POINT_CHARS)
+            else -> capped.joinToString("\n") { "• ${clipAtWord(it, MAX_BULLET_CHARS)}" }.take(MAX_SUMMARY_CHARS)
         }
     }
 
@@ -157,22 +170,23 @@ class MemoryAnalyzer(
                 val baseDate = Instant.ofEpochMilli(nowMillis).atZone(zoneId).toLocalDate()
                 val dayDiff = ChronoUnit.DAYS.between(baseDate, startDt.toLocalDate())
                 val dateLabel = when (dayDiff) {
-                    0L -> "今日"
-                    1L -> "明日"
-                    2L -> "后日"
-                    else -> startDt.format(DateTimeFormatter.ofPattern("MM-dd"))
+                    0L -> "Today"
+                    1L -> "Tomorrow"
+                    2L -> "Day after tomorrow"
+                    else -> startDt.format(DateTimeFormatter.ofPattern("EEE, MMM d", Locale.US))
                 }
-                val timePart = startDt.format(DateTimeFormatter.ofPattern("HH:mm"))
-                val locPart = calendar.location?.takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty()
-                val actionCore = if (calendar.title.length <= 4) "${calendar.title}安排" else calendar.title
-                if (calendar.location.isNullOrBlank() && actionCore.length <= 12) {
-                    "$dateLabel $timePart $actionCore".take(60)
+                val timePart = startDt.format(DateTimeFormatter.ofPattern("h:mm a", Locale.US))
+                val title = clipAtWord(calendar.title, MAX_BULLET_CHARS)
+                val location = calendar.location?.takeIf { it.isNotBlank() }
+                if (location == null && title.length <= 32) {
+                    "$dateLabel $timePart · $title"
                 } else {
-                    "• $dateLabel $timePart$locPart\n• ${actionCore.take(36)}"
+                    val locPart = location?.let { " · $it" }.orEmpty()
+                    "• $dateLabel $timePart$locPart\n• $title"
                 }
             }.getOrNull()
             if (!formatted.isNullOrBlank()) {
-                return formatted
+                return formatted.take(MAX_SUMMARY_CHARS)
             }
         }
 
@@ -180,16 +194,10 @@ class MemoryAnalyzer(
             .replace('\n', ' ')
             .let { LEADING_TOPIC_PREFIX_REGEX.replace(it, "") }
             .trim()
-        val clauses = redacted
-            .split('。', '！', '？', ';', '；')
-            .map { LEADING_TOPIC_PREFIX_REGEX.replace(it.trim(), "").trim('，', ',', ' ') }
-            .filter { it.isNotBlank() }
-
-        if (clauses.isEmpty()) {
-            return if (redacted.length > 60) redacted.take(60) + "…" else redacted
+        val normalized = normalizeBulletSummary(redacted)
+        if (normalized.isBlank()) {
+            return clipAtWord(redacted, MAX_SINGLE_POINT_CHARS)
         }
-
-        val normalized = normalizeBulletSummary(clauses.joinToString("\n"))
         val lines = normalized.lines().take(3)
         return if (lines.size == 1) {
             lines[0].removePrefix("• ").trim()
@@ -199,47 +207,34 @@ class MemoryAnalyzer(
     }
 
     internal fun redactSensitiveDetails(text: String): String {
-        var result = ACCOUNT_SECRET_PAIR_REGEX.replace(text, "已留存相关账号凭证（详见原文）")
-        result = PASSWORD_SECRET_REGEX.replace(result, "已留存相关凭证（详见原文）")
+        var result = ACCOUNT_SECRET_PAIR_REGEX.replace(text) { match ->
+            "${match.groupValues[1]} saved (see source)"
+        }
+        result = PASSWORD_SECRET_REGEX.replace(result) { match ->
+            "${match.groupValues[1]} saved (see source)"
+        }
         return result
     }
 
     private fun extractTags(content: String, hasCalendarProposal: Boolean): List<String> {
         val tags = ArrayList<String>(3)
-        if (containsAny(content, listOf("吃", "饭", "餐", "午饭", "晚饭", "早饭", "外卖", "咖啡", "奶茶", "聚餐", "火锅", "烧烤"))) {
-            tags += "饮食"
-        }
-        if (containsAny(content, listOf("快递", "取件", "买", "超市", "下单", "退货", "缴费", "房租", "水电", "物业"))) {
-            tags += "生活待办"
-        }
-        if (containsAny(content, listOf("高铁", "飞机", "航班", "打车", "车票", "酒店", "出发", "机场", "车站"))) {
-            tags += "出行"
-        }
-        if (containsAny(content, listOf("吃药", "医院", "看牙", "体检", "复查", "跑步", "健身", "运动"))) {
-            tags += "健康"
-        }
-        if (containsAny(content, listOf("密码", "账号", "token", "key", "口令", "验证码", "wifi", "宽带", "Admin"))) {
-            tags += "账号凭证"
-        }
-        if (containsAny(content, listOf("合同", "法务", "条款", "审批", "账期", "预付款", "付款", "财务", "发票", "报价"))) {
-            tags += "商务合同"
-        }
-        if (containsAny(content, listOf("屏", "模组", "供应商", "测试", "样品", "验收", "研发", "固件", "联调", "方案"))) {
-            tags += "项目推进"
+        for ((tag, keywords) in TAG_KEYWORDS) {
+            if (keywords.containsMatchIn(content)) {
+                tags += tag
+            }
         }
         if (hasCalendarProposal && tags.size < 2) {
-            tags += "日程提醒"
+            tags += TAG_FOLLOW_UP
         }
         return tags.distinct().take(3)
     }
 
     private fun extractCalendarProposal(content: String, nowMillis: Long): CalendarProposal? {
         val relativeMinutes = parseRelativeDurationMinutes(content)
-        val hasExplicitClockOrDate = hasExplicitTimeExpression(content)
-        if (relativeMinutes == null && !hasExplicitClockOrDate) return null
-
-        val cleanTitle = extractCleanTitle(content)
-        if (relativeMinutes == null && !hasScheduleVerbOrObject(content, cleanTitle)) {
+        val hasClock = findClockTime(content) != null
+        val hasExplicitDate = DATE_KEYWORD_REGEX.containsMatchIn(content) || DAY_PART_REGEX.containsMatchIn(content)
+        if (relativeMinutes == null && !hasClock && !hasExplicitDate) return null
+        if (relativeMinutes == null && !hasClock && !EVENT_KEYWORD_REGEX.containsMatchIn(content)) {
             return null
         }
 
@@ -255,13 +250,9 @@ class MemoryAnalyzer(
             LocalDateTime.of(resolveDate(content, baseDate), resolveTime(content))
         }
 
-        val location = LOCATION_REGEX.find(content)?.groupValues?.getOrNull(1)?.trim()?.takeIf { it.isNotEmpty() }
-        val resolvedTitle = cleanTitle.ifBlank { "待办提醒" }.take(24)
-        val duration = if (containsAny(content, listOf("吃", "饭", "餐", "外卖", "快递", "取件", "药", "买", "电话"))) {
-            30
-        } else {
-            60
-        }
+        val location = extractLocation(content)
+        val resolvedTitle = extractCleanTitle(content).ifBlank { "Reminder" }
+        val duration = if (SHORT_EVENT_REGEX.containsMatchIn(content)) 30 else 60
 
         return CalendarProposal(
             title = resolvedTitle,
@@ -271,249 +262,412 @@ class MemoryAnalyzer(
         )
     }
 
-    private fun hasExplicitTimeExpression(content: String): Boolean =
-        COLON_TIME_REGEX.containsMatchIn(content) ||
-            ZH_TIME_REGEX.containsMatchIn(content) ||
-            containsAny(
-                content,
-                listOf("今天", "今晚", "今早", "明天", "明早", "明晚", "后天", "下周", "周一", "周二", "周三", "周四", "周五", "周六", "周日", "中午", "下午", "晚上"),
-            )
-
-    private fun hasScheduleVerbOrObject(content: String, cleanTitle: String): Boolean {
-        if (containsAny(
-                content,
-                listOf("会议", "碰头", "评审", "对齐", "沟通", "面聊", "约见", "提醒", "汇报", "确认", "过一遍", "吃饭", "午饭", "晚饭", "聚餐", "快递", "取件", "体检", "吃药", "出发", "开会"),
-            )
-        ) {
-            return true
-        }
-        return COLON_TIME_REGEX.containsMatchIn(content) ||
-            (ZH_TIME_REGEX.containsMatchIn(content) && cleanTitle.length >= 2)
+    internal fun extractLocation(content: String): String? {
+        val structured = STRUCTURED_LOCATION_REGEX.find(content)?.groupValues?.getOrNull(1)
+        val venue = structured ?: VENUE_LOCATION_REGEX.find(content)?.groupValues?.getOrNull(1)
+        return venue?.trim()?.trimEnd(',', '.', ';', ':')?.takeIf { it.isNotEmpty() }
     }
 
     internal fun parseRelativeDurationMinutes(content: String): Long? {
-        ARABIC_HOURS_AFTER_REGEX.find(content)?.let { m ->
-            val hours = m.groupValues[1].toDoubleOrNull() ?: return@let
-            return (hours * 60.0).roundToLong().coerceAtLeast(1L)
+        val match = RELATIVE_DURATION_REGEX.find(content) ?: return null
+        val rawAmount = match.groupValues[1].lowercase(Locale.US)
+        val amount = rawAmount.toDoubleOrNull() ?: WORD_NUMBERS[rawAmount] ?: return null
+        val unit = match.groupValues[2].lowercase(Locale.US)
+        val minutes = when {
+            unit.startsWith("h") -> amount * 60.0
+            unit.startsWith("d") -> amount * 24.0 * 60.0
+            else -> amount
         }
-        ZH_HOURS_AFTER_REGEX.find(content)?.let { m ->
-            return when (m.groupValues[1]) {
-                "半", "半个" -> 30L
-                "一个半" -> 90L
-                "一" -> 60L
-                "两", "二" -> 120L
-                "三" -> 180L
-                "四" -> 240L
-                "五" -> 300L
-                "六" -> 360L
-                else -> 60L
-            }
-        }
-        if (content.contains("一刻钟后") || content.contains("一刻钟之后")) {
-            return 15L
-        }
-        ARABIC_MINUTES_AFTER_REGEX.find(content)?.let { m ->
-            val mins = m.groupValues[1].toLongOrNull() ?: return@let
-            return mins.coerceAtLeast(1L)
-        }
-        ZH_MINUTES_AFTER_REGEX.find(content)?.let { m ->
-            return ZH_NUMBER_MAP[m.groupValues[1]]?.toLong() ?: 15L
-        }
-        DAYS_AFTER_REGEX.find(content)?.let { m ->
-            val raw = m.groupValues[1]
-            val days = raw.toLongOrNull() ?: ZH_NUMBER_MAP[raw]?.toLong() ?: return@let
-            return (days * 24L * 60L).coerceAtLeast(1L)
-        }
-        return null
+        return minutes.roundToLong().coerceAtLeast(1L)
     }
 
     internal fun extractCleanTitle(content: String): String {
         var cleaned = content.trim()
-        cleaned = RELATIVE_STRIP_REGEX.replace(cleaned, " ")
-        cleaned = CALENDAR_DATE_STRIP_REGEX.replace(cleaned, " ")
-        cleaned = DAY_PART_CLOCK_STRIP_REGEX.replace(cleaned, " ")
-        cleaned = LOCATION_REGEX.replace(cleaned, " ")
-        cleaned = cleaned
-            .replace(Regex("""\s+"""), " ")
-            .trim()
-            .trim('，', ',', '。', '；', ';', '、', ':', '：', '-', ' ')
-        cleaned = LEADING_MODAL_REGEX.replace(cleaned, "").trim()
-        cleaned = cleaned.trim('，', ',', '。', '；', ';', '、', ':', '：', '-', ' ')
+        cleaned = RELATIVE_DURATION_REGEX.replace(cleaned, " ")
+        cleaned = STRUCTURED_LOCATION_REGEX.replace(cleaned, " ")
+        cleaned = VENUE_LOCATION_REGEX.replace(cleaned, " ")
+        cleaned = CLOCK_STRIP_REGEX.replace(cleaned, " ")
+        cleaned = DATE_STRIP_REGEX.replace(cleaned, " ")
+        cleaned = cleaned.replace(WHITESPACE_REGEX, " ").trim()
 
-        if (cleaned.length > 22) {
-            val firstClause = cleaned.split('，', '。', '；', ',', ';').firstOrNull { it.isNotBlank() }?.trim()
-            cleaned = if (!firstClause.isNullOrBlank() && firstClause.length <= 22) {
-                firstClause
-            } else {
-                cleaned.take(22).trimEnd()
+        val colonIdx = cleaned.indexOf(':')
+        if (colonIdx >= 0 && cleaned.substring(colonIdx + 1).isNotBlank()) {
+            val head = cleaned.substring(0, colonIdx).trim(' ', ',', '.', ';', '-')
+            if (head.isEmpty() || head.split(' ').size <= 3) {
+                cleaned = cleaned.substring(colonIdx + 1)
             }
         }
-        return cleaned
+        cleaned = cleaned.trim(' ', ',', '.', ';', ':', '-')
+        cleaned = DANGLING_PREPOSITION_REGEX.replace(cleaned, "").trim(' ', ',', '.', ';', ':', '-')
+        cleaned = LEADING_MODAL_REGEX.replace(cleaned, "").trim()
+
+        cleaned = TITLE_CLAUSE_BREAK_REGEX.split(cleaned).firstOrNull { it.isNotBlank() }?.trim().orEmpty()
+        if (cleaned.length > MAX_TITLE_CHARS) {
+            val withIdx = cleaned.indexOf(" with ")
+            if (withIdx > 0) cleaned = cleaned.substring(0, withIdx)
+        }
+        cleaned = clipAtWord(cleaned.trim(' ', ',', '.', ';', ':', '-'), MAX_TITLE_CHARS)
+        return cleaned.replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.US) else it.toString() }
     }
 
-    private fun resolveDate(content: String, baseDate: LocalDate): LocalDate = when {
-        content.contains("后天") -> baseDate.plusDays(2)
-        content.contains("明天") || content.contains("明早") || content.contains("明晚") -> baseDate.plusDays(1)
-        content.contains("今天") || content.contains("今晚") || content.contains("今早") -> baseDate
-        content.contains("下周一") -> baseDate.with(TemporalAdjusters.next(DayOfWeek.MONDAY))
-        content.contains("下周二") -> baseDate.with(TemporalAdjusters.next(DayOfWeek.TUESDAY))
-        content.contains("下周三") -> baseDate.with(TemporalAdjusters.next(DayOfWeek.WEDNESDAY))
-        content.contains("下周四") -> baseDate.with(TemporalAdjusters.next(DayOfWeek.THURSDAY))
-        content.contains("下周五") -> baseDate.with(TemporalAdjusters.next(DayOfWeek.FRIDAY))
-        content.contains("下周六") -> baseDate.with(TemporalAdjusters.next(DayOfWeek.SATURDAY))
-        content.contains("下周日") || content.contains("下周天") -> baseDate.with(TemporalAdjusters.next(DayOfWeek.SUNDAY))
-        content.contains("周一") -> baseDate.with(TemporalAdjusters.nextOrSame(DayOfWeek.MONDAY))
-        content.contains("周二") -> baseDate.with(TemporalAdjusters.nextOrSame(DayOfWeek.TUESDAY))
-        content.contains("周三") -> baseDate.with(TemporalAdjusters.nextOrSame(DayOfWeek.WEDNESDAY))
-        content.contains("周四") -> baseDate.with(TemporalAdjusters.nextOrSame(DayOfWeek.THURSDAY))
-        content.contains("周五") -> baseDate.with(TemporalAdjusters.nextOrSame(DayOfWeek.FRIDAY))
-        content.contains("周六") -> baseDate.with(TemporalAdjusters.nextOrSame(DayOfWeek.SATURDAY))
-        content.contains("周日") || content.contains("周天") -> baseDate.with(TemporalAdjusters.nextOrSame(DayOfWeek.SUNDAY))
-        else -> baseDate
+    private fun resolveDate(content: String, baseDate: LocalDate): LocalDate {
+        val lower = content.lowercase(Locale.US)
+        if (DAY_AFTER_TOMORROW_REGEX.containsMatchIn(lower)) return baseDate.plusDays(2)
+        if (Regex("""\btomorrow\b""").containsMatchIn(lower)) return baseDate.plusDays(1)
+        if (Regex("""\b(?:today|tonight|this\s+(?:morning|afternoon|evening))\b""").containsMatchIn(lower)) {
+            return baseDate
+        }
+        NEXT_WEEKDAY_REGEX.find(lower)?.let { match ->
+            return baseDate.with(TemporalAdjusters.next(weekdayOf(match.groupValues[1])))
+        }
+        WEEKDAY_REGEX.find(lower)?.let { match ->
+            return baseDate.with(TemporalAdjusters.nextOrSame(weekdayOf(match.groupValues[1])))
+        }
+        return baseDate
+    }
+
+    private fun weekdayOf(name: String): DayOfWeek = when (name.take(3)) {
+        "mon" -> DayOfWeek.MONDAY
+        "tue" -> DayOfWeek.TUESDAY
+        "wed" -> DayOfWeek.WEDNESDAY
+        "thu" -> DayOfWeek.THURSDAY
+        "fri" -> DayOfWeek.FRIDAY
+        "sat" -> DayOfWeek.SATURDAY
+        else -> DayOfWeek.SUNDAY
+    }
+
+    private data class ClockTime(val hour: Int, val minute: Int, val meridiem: String?)
+
+    private fun findClockTime(content: String): ClockTime? {
+        COLON_TIME_REGEX.find(content)?.let { m ->
+            val hour = m.groupValues[1].toIntOrNull() ?: return@let
+            val minute = m.groupValues[2].toIntOrNull() ?: return@let
+            if (hour > 23 || minute > 59) return@let
+            return ClockTime(hour, minute, m.groupValues[3].takeIf { it.isNotEmpty() })
+        }
+        MERIDIEM_TIME_REGEX.find(content)?.let { m ->
+            val hour = m.groupValues[1].toIntOrNull() ?: return@let
+            if (hour !in 1..12) return@let
+            return ClockTime(hour, 0, m.groupValues[2])
+        }
+        BARE_AT_TIME_REGEX.find(content)?.let { m ->
+            val hour = m.groupValues[1].toIntOrNull() ?: return@let
+            if (hour !in 1..12) return@let
+            return ClockTime(hour, 0, null)
+        }
+        return null
     }
 
     private fun resolveTime(content: String): LocalTime {
-        val colonMatch = COLON_TIME_REGEX.find(content)
-        if (colonMatch != null) {
-            var hour = colonMatch.groupValues[1].toIntOrNull() ?: 10
-            val minute = colonMatch.groupValues[2].toIntOrNull() ?: 0
-            if ((content.contains("下午") || content.contains("晚上") || content.contains("明晚") || content.contains("今晚")) && hour in 1..11) {
-                hour += 12
+        val lower = content.lowercase(Locale.US)
+        val clock = findClockTime(content)
+        if (clock != null) {
+            var hour = clock.hour
+            val meridiem = clock.meridiem?.lowercase(Locale.US)?.replace(".", "")
+            when {
+                meridiem == "pm" && hour in 1..11 -> hour += 12
+                meridiem == "am" && hour == 12 -> hour = 0
+                meridiem == null && hour in 1..11 && EVENING_HINT_REGEX.containsMatchIn(lower) -> hour += 12
             }
-            return LocalTime.of(hour.coerceIn(0, 23), minute.coerceIn(0, 59))
-        }
-        val zhTimeMatch = ZH_TIME_REGEX.find(content)
-        if (zhTimeMatch != null) {
-            var hour = zhTimeMatch.groupValues[1].toIntOrNull() ?: 10
-            val half = zhTimeMatch.groupValues.getOrNull(2) == "半"
-            if ((content.contains("下午") || content.contains("晚上") || content.contains("明晚") || content.contains("今晚")) && hour in 1..11) {
-                hour += 12
-            }
-            return LocalTime.of(hour.coerceIn(0, 23), if (half) 30 else 0)
+            return LocalTime.of(hour.coerceIn(0, 23), clock.minute.coerceIn(0, 59))
         }
         return when {
-            content.contains("中午") -> LocalTime.of(12, 0)
-            content.contains("早") -> LocalTime.of(8, 30)
-            content.contains("晚") -> LocalTime.of(19, 30)
-            content.contains("下午") -> LocalTime.of(15, 0)
+            Regex("""\bnoon\b""").containsMatchIn(lower) -> LocalTime.of(12, 0)
+            Regex("""\bmorning\b""").containsMatchIn(lower) -> LocalTime.of(9, 0)
+            Regex("""\b(?:tonight|evening)\b""").containsMatchIn(lower) -> LocalTime.of(19, 30)
+            Regex("""\bafternoon\b""").containsMatchIn(lower) -> LocalTime.of(15, 0)
             else -> LocalTime.of(10, 0)
         }
     }
+
+    private data class EntityHit(val name: String, val start: Int, val end: Int)
 
     private fun extractRelations(content: String): List<RelationTriple> {
         val triples = ArrayList<RelationTriple>()
 
         EXPLICIT_ARROW_REGEX.findAll(content).forEach { match ->
             val src = match.groupValues[1].trim()
-            val rel = match.groupValues[2].trim().ifEmpty { "关联" }
+            val rel = match.groupValues[2].trim().ifEmpty { DEFAULT_RELATION }
             val tgt = match.groupValues[3].trim()
             if (src.isNotEmpty() && tgt.isNotEmpty()) {
                 triples += RelationTriple(source = src, target = tgt, relation = rel)
             }
         }
+        if (triples.isNotEmpty()) return triples
 
-        val entities = KNOWN_ENTITY_PATTERNS
-            .flatMap { regex -> regex.findAll(content).map { it.value.trim() } }
-            .distinct()
-            .take(8)
+        val allEntities = LinkedHashSet<String>()
+        var lastEntity: String? = null
+        val clauses = CLAUSE_SPLIT_REGEX.split(content).map { it.trim() }.filter { it.isNotEmpty() }
+        for (clause in clauses) {
+            val hits = findEntities(clause)
+            hits.forEach { allEntities += it.name }
+            if (hits.isEmpty()) continue
 
-        if (triples.isEmpty() && entities.size >= 2) {
-            val clauses = content.split('，', '。', '；', ';', '\n')
-            for (clause in clauses) {
-                val present = entities.filter { clause.contains(it) }
-                if (present.size >= 2) {
-                    val relationLabel = inferRelationVerb(clause)
-                    for (i in 0 until present.size - 1) {
+            var subject: EntityHit? = null
+            var startIdx = 0
+            if (RELATIVE_PRONOUN_REGEX.containsMatchIn(clause) && lastEntity != null) {
+                val pronounEnd = RELATIVE_PRONOUN_REGEX.find(clause)!!.range.last + 1
+                val object0 = hits.first()
+                triples += RelationTriple(
+                    source = lastEntity,
+                    target = object0.name,
+                    relation = inferVerb(clause.substring(minOf(pronounEnd, object0.start), object0.start)) ?: DEFAULT_RELATION,
+                )
+                subject = object0
+                startIdx = 1
+            }
+            if (subject == null) {
+                subject = hits.first()
+                startIdx = 1
+            }
+
+            for (j in startIdx until hits.size) {
+                val previous = hits[j - 1]
+                val current = hits[j]
+                val between = clause.substring(previous.end, current.start)
+                val connector = between.trim().lowercase(Locale.US)
+                val activeSubject = subject!!
+                when {
+                    connector == "and" || connector == "&" || connector == "," -> {
                         triples += RelationTriple(
-                            source = present[i],
-                            target = present[i + 1],
-                            relation = relationLabel,
-                            bidirectional = clause.contains("对齐") || clause.contains("配合") || clause.contains("协同"),
+                            source = previous.name,
+                            target = current.name,
+                            relation = inferJointLabel(clause),
+                            bidirectional = true,
+                        )
+                    }
+                    connector == "from" || connector == "of" -> {
+                        triples += RelationTriple(source = previous.name, target = current.name, relation = "represents")
+                    }
+                    connector == "at" || connector == "in" -> {
+                        triples += RelationTriple(source = previous.name, target = current.name, relation = "works at")
+                    }
+                    SUBORDINATOR_REGEX.containsMatchIn(between) -> {
+                        subject = current
+                    }
+                    else -> {
+                        val verbSpan = clause.substring(activeSubject.end, current.start)
+                        val label = inferVerb(verbSpan) ?: DEFAULT_RELATION
+                        triples += RelationTriple(
+                            source = activeSubject.name,
+                            target = current.name,
+                            relation = label,
+                            bidirectional = label in BIDIRECTIONAL_LABELS,
                         )
                     }
                 }
             }
-            if (triples.isEmpty()) {
-                for (i in 0 until entities.size - 1) {
-                    triples += RelationTriple(
-                        source = entities[i],
-                        target = entities[i + 1],
-                        relation = "关联",
-                    )
-                }
+            lastEntity = hits.last().name
+        }
+
+        if (triples.isEmpty() && allEntities.size >= 2) {
+            val ordered = allEntities.toList().take(8)
+            for (i in 0 until ordered.size - 1) {
+                triples += RelationTriple(source = ordered[i], target = ordered[i + 1], relation = DEFAULT_RELATION)
             }
         }
         return triples
     }
 
-    private fun inferRelationVerb(clause: String): String = when {
-        clause.contains("引荐") || clause.contains("介绍") -> "引荐"
-        clause.contains("负责") || clause.contains("主责") -> "负责"
-        clause.contains("卡在") || clause.contains("停在") -> "卡点审批"
-        clause.contains("提醒") || clause.contains("审核") -> "法务审查"
-        clause.contains("确认") || clause.contains("验收") -> "待确认"
-        clause.contains("放行") || clause.contains("付款") || clause.contains("账期") -> "付款前置"
-        clause.contains("交接") || clause.contains("测试") -> "交付测试"
-        clause.contains("对齐") -> "条款对齐"
-        else -> "协同推进"
+    private fun findEntities(clause: String): List<EntityHit> {
+        val hits = ArrayList<EntityHit>()
+        for (match in ENTITY_REGEX.findAll(clause)) {
+            var name = match.value
+            var start = match.range.first
+            val leading = ENTITY_LEADING_STOPWORD_REGEX.find(name)
+            if (leading != null) {
+                name = name.substring(leading.range.last + 1)
+                start += leading.range.last + 1
+            }
+            if (!name.contains(' ') && !name.contains('-')) continue
+            if (name in ENTITY_BLOCKLIST) continue
+            if (hits.any { it.name == name }) continue
+            hits += EntityHit(name = name, start = start, end = start + name.length)
+        }
+        return hits
     }
 
-    private fun containsAny(text: String, keywords: List<String>): Boolean =
-        keywords.any { text.contains(it, ignoreCase = true) }
+    private fun inferVerb(span: String): String? {
+        var best: Pair<Int, String>? = null
+        for ((regex, label) in VERB_LABELS) {
+            val match = regex.find(span) ?: continue
+            if (best == null || match.range.first < best.first) {
+                best = match.range.first to label
+            }
+        }
+        return best?.second
+    }
+
+    private fun inferJointLabel(clause: String): String {
+        val lower = clause.lowercase(Locale.US)
+        return when {
+            lower.contains("align") -> "aligns with"
+            Regex("""\b(?:meet|meets|meeting|met)\b""").containsMatchIn(lower) -> "meets"
+            lower.contains("review") -> "joint review"
+            lower.contains("sign") -> "joint sign-off"
+            else -> "works with"
+        }
+    }
 
     companion object {
-        private val ARABIC_HOURS_AFTER_REGEX = Regex("""(\d+(?:\.\d+)?)\s*(?:个)?小时(?:之)?后""")
-        private val ZH_HOURS_AFTER_REGEX = Regex("""(一个半|半个?|一|两|二|三|四|五|六)\s*(?:个)?小时(?:之)?后""")
-        private val ARABIC_MINUTES_AFTER_REGEX = Regex("""(\d+)\s*分钟?(?:之)?后""")
-        private val ZH_MINUTES_AFTER_REGEX = Regex("""(半|一|两|二|三|五|十|十五|二十|三十|四十五)\s*分钟?(?:之)?后""")
-        private val DAYS_AFTER_REGEX = Regex("""(\d+|一|两|二|三|四|五|六|七)\s*天(?:之)?后""")
+        private const val MAX_BULLET_CHARS = 70
+        private const val MAX_SINGLE_POINT_CHARS = 90
+        private const val MAX_SUMMARY_CHARS = 300
+        private const val MAX_TITLE_CHARS = 56
+        private const val MIN_CLAUSE_CHARS = 20
+        private const val DEFAULT_RELATION = "related to"
+        private const val TAG_FOLLOW_UP = "Follow-up"
 
-        private val RELATIVE_STRIP_REGEX = Regex(
-            """(?:\d+(?:\.\d+)?|一个半|半个?|一|两|二|三|四|五|六|十|十五|二十|三十|四十五|七)\s*(?:(?:个)?小时|分钟?|天)(?:之)?后|一刻钟(?:之)?后""",
-        )
-        private val CALENDAR_DATE_STRIP_REGEX = Regex(
-            """(?:大后|今|明|后)(?:天|早|晚|午)|下?周[一二三四五六日天]""",
-        )
-        private val DAY_PART_CLOCK_STRIP_REGEX = Regex(
-            """(?:早上|上午|中午|下午|晚上|傍晚)?\s*\d{1,2}\s*(?::|：|点)\s*(?:\d{1,2}|半)?|早上|上午|中午|下午|晚上|傍晚""",
-        )
-        private val LEADING_MODAL_REGEX = Regex("""^(?:记得|提醒我|别忘了|待会儿?|等会儿?|顺便|准备|去(?=吃饭|拿|取|买|开会|见))""")
-        private val LEADING_TOPIC_PREFIX_REGEX = Regex("""^(?:供应商对接|采购推进卡点复盘|项目同步|会议纪要|备忘|记录一下|随手记)[:：]\s*""")
-        private val BULLET_PREFIX_REGEX = Regex("""^(?:[•·\-\*]|\d+[.)、])\s*""")
+        private val BIDIRECTIONAL_LABELS = setOf("aligns with", "works with", "meets")
+
+        /** Splits on newlines, semicolons, CJK sentence marks, and `.!?` followed by whitespace or end. */
+        private val SENTENCE_SPLIT_REGEX = Regex("""\n+|[;；。！？]+|(?<=[.!?])(?=\s|$)""")
+        private val BULLET_PREFIX_REGEX = Regex("""^(?:[•·\-*]|\d+[.)])\s*""")
+        private val WHITESPACE_REGEX = Regex("""\s+""")
+        private val LEADING_TOPIC_PREFIX_REGEX = Regex("""^[A-Z][A-Za-z\s-]{0,30}:\s+""")
+
         private val ACCOUNT_SECRET_PAIR_REGEX = Regex(
-            """(?:调试后台|测试后台|后台|登录)?账号\s*[:：]?\s*[A-Za-z0-9_.-]{3,}(?:\s*[，,、\s]+\s*(?:初始)?(?:密码|口令|token|key)\s*[:：]?\s*[^\s，。,；;]+)?""",
+            """\b(login|credentials?|account|username)\s*(?:is|:|=)?\s*[^\s,;/]+\s*/\s*[^\s,;]*[^\s,;.]""",
             RegexOption.IGNORE_CASE,
         )
         private val PASSWORD_SECRET_REGEX = Regex(
-            """(?:初始)?(?:密码|口令|验证码)\s*[:：]?\s*[A-Za-z0-9@#$%^&*_.-]{4,}""",
+            """\b(password|passcode|pin|pwd|otp|verification code|api key|token)(?:\s*(?:is|:|=)\s*|\s+)(?=\S*[\d@#$%^&*!])[^\s,;]*[^\s,;.]""",
             RegexOption.IGNORE_CASE,
         )
 
-        private val ZH_NUMBER_MAP = mapOf(
-            "一" to 1, "二" to 2, "两" to 2, "三" to 3, "四" to 4, "五" to 5,
-            "六" to 6, "七" to 7, "十" to 10, "十五" to 15, "二十" to 20, "三十" to 30, "四十五" to 45,
+        private fun keywords(vararg words: String): Regex =
+            Regex(words.joinToString("|", prefix = """\b(?:""", postfix = """)\b""") { Regex.escape(it) }, RegexOption.IGNORE_CASE)
+
+        private val TAG_KEYWORDS: List<Pair<String, Regex>> = listOf(
+            "Food" to keywords("lunch", "dinner", "breakfast", "brunch", "coffee", "meal", "restaurant", "takeout", "eat"),
+            "Errands" to keywords("parcel", "package", "groceries", "pick up", "buy", "rent", "bill", "laundry"),
+            "Travel" to keywords("flight", "train", "airport", "hotel", "taxi", "station", "trip", "boarding"),
+            "Health" to keywords("doctor", "dentist", "hospital", "clinic", "medicine", "pill", "workout", "gym", "check-up", "checkup"),
+            "Supply chain" to keywords("vendor", "supplier", "procurement", "sample", "samples", "quote", "quoted", "shipment", "factory", "mass-production", "module", "burn-in"),
+            "Legal" to keywords("contract", "agreement", "clause", "legal", "indemnity", "warranty", "nda", "compliance", "addendum"),
+            "Finance" to keywords("invoice", "payment", "deposit", "escrow", "budget", "finance", "reimbursement", "payroll", "tax"),
+            "Credentials" to keywords("password", "passcode", "login", "pin", "token", "api key", "wifi", "wi-fi", "credentials"),
+            "Math" to keywords("equation", "integral", "derivative", "theorem", "calculate", "algebra", "proof"),
         )
 
-        private val COLON_TIME_REGEX = Regex("""(\d{1,2})[:：](\d{2})""")
-        private val ZH_TIME_REGEX = Regex("""(\d{1,2})\s*点(半)?""")
-        private val LOCATION_REGEX = Regex("""(?:在|于)([\u4E00-\u9FFFA-Za-z0-9]{2,20}(?:会议室|大厦|园区|中心|楼))""")
-        private val EXPLICIT_ARROW_REGEX = Regex("""([\u4E00-\u9FFFA-Za-z0-9_]{1,16})\s*[-—]{1,2}\s*\[?([^\]\->\n]{1,12})\]?\s*[-—]*>\s*([\u4E00-\u9FFFA-Za-z0-9_]{1,16})""")
-
-        private val KNOWN_ENTITY_PATTERNS = listOf(
-            Regex("""[王张李刘陈赵周吴孙郑钱孙][总姐哥工敏涛杰明]"""),
-            Regex("""老[王张李陈赵刘周]"""),
-            Regex("""(?:法务|财务|研发|采购|供应链|产品|技术)(?:[\u4E00-\u9FFF]{1,3})?"""),
-            Regex("""[\u4E00-\u9FFF]{2,6}(?:合同|模组|账号|样品|条款|预付款|验收单|方案|系统)"""),
+        private val EVENT_KEYWORD_REGEX = keywords(
+            "meeting", "meet", "review", "call", "sync", "lunch", "dinner", "breakfast", "coffee",
+            "appointment", "pick up", "deadline", "interview", "demo", "standup", "stand-up", "check-up",
+            "checkup", "flight", "train", "sign off", "presentation", "workshop", "remind", "dentist",
+            "doctor", "visit", "catch up", "party", "class",
         )
+        private val SHORT_EVENT_REGEX = keywords(
+            "lunch", "dinner", "breakfast", "coffee", "meal", "parcel", "package", "pick up", "medicine", "pill", "call", "buy",
+        )
+
+        private val WORD_NUMBERS = mapOf(
+            "a" to 1.0, "an" to 1.0, "one" to 1.0, "two" to 2.0, "three" to 3.0, "four" to 4.0,
+            "five" to 5.0, "six" to 6.0, "seven" to 7.0, "eight" to 8.0, "nine" to 9.0, "ten" to 10.0,
+            "fifteen" to 15.0, "twenty" to 20.0, "thirty" to 30.0, "forty-five" to 45.0,
+            "half a" to 0.5, "half an" to 0.5, "a couple of" to 2.0, "a few" to 3.0,
+        )
+        private val RELATIVE_DURATION_REGEX = Regex(
+            """\bin\s+(\d+(?:\.\d+)?|half an?|a couple of|a few|an?|one|two|three|four|five|six|seven|eight|nine|ten|fifteen|twenty|thirty|forty-five)\s*(hours?|hrs?|minutes?|mins?|days?)\b""",
+            RegexOption.IGNORE_CASE,
+        )
+
+        private const val WEEKDAYS = "monday|tuesday|wednesday|thursday|friday|saturday|sunday"
+        private val DAY_AFTER_TOMORROW_REGEX = Regex("""\bday\s+after\s+tomorrow\b""", RegexOption.IGNORE_CASE)
+        private val NEXT_WEEKDAY_REGEX = Regex("""\bnext\s+($WEEKDAYS)\b""")
+        private val WEEKDAY_REGEX = Regex("""\b($WEEKDAYS)\b""")
+        private val DATE_KEYWORD_REGEX = Regex(
+            """\b(?:today|tonight|tomorrow|day\s+after\s+tomorrow|$WEEKDAYS)\b""",
+            RegexOption.IGNORE_CASE,
+        )
+        private val DAY_PART_REGEX = Regex("""\b(?:this\s+(?:morning|afternoon|evening)|noon)\b""", RegexOption.IGNORE_CASE)
+        private val EVENING_HINT_REGEX = Regex("""\b(?:tonight|evening|afternoon)\b""")
+
+        private val COLON_TIME_REGEX = Regex("""\b(\d{1,2}):(\d{2})(?:\s*([ap]\.?m\.?)(?![a-z]))?""", RegexOption.IGNORE_CASE)
+        private val MERIDIEM_TIME_REGEX = Regex("""\b(\d{1,2})\s*([ap]\.?m\.?)(?![a-z])""", RegexOption.IGNORE_CASE)
+        private val BARE_AT_TIME_REGEX = Regex("""\bat\s+(\d{1,2})(?:\s*o'clock)?\b(?![:.\-]\d)(?!\s*(?:%|hours?|minutes?|mins?|days?))""", RegexOption.IGNORE_CASE)
+
+        private val CLOCK_STRIP_REGEX = Regex(
+            """\b(?:at\s+)?\d{1,2}(?::\d{2})?\s*[ap]\.?m\.?(?![a-z])|\b(?:at\s+)?\d{1,2}:\d{2}|\bat\s+\d{1,2}\s*o'clock\b""",
+            RegexOption.IGNORE_CASE,
+        )
+        private val DATE_STRIP_REGEX = Regex(
+            """\b(?:the\s+)?day\s+after\s+tomorrow\b|\b(?:(?:next|this|on|by)\s+)?(?:$WEEKDAYS)\b|\btomorrow(?:\s+(?:morning|afternoon|evening|night))?\b|\b(?:today|tonight|noon)\b|\bthis\s+(?:morning|afternoon|evening)\b""",
+            RegexOption.IGNORE_CASE,
+        )
+        private val DANGLING_PREPOSITION_REGEX = Regex("""^(?:(?:at|on|by|in)\s+)+|(?:\s+(?:at|on|by|in))+$""", RegexOption.IGNORE_CASE)
+        private val LEADING_MODAL_REGEX = Regex(
+            """^(?:please\s+)?(?:remember\s+to|remind\s+me\s+to|don'?t\s+forget\s+to|i\s+(?:need|have)\s+to|need\s+to|have\s+to|gotta|must)\s+""",
+            RegexOption.IGNORE_CASE,
+        )
+        private val TITLE_CLAUSE_BREAK_REGEX = Regex(""",\s*then\b|;|(?<=[.!?])\s+|,\s*and then\b""", RegexOption.IGNORE_CASE)
+
+        private const val PLACE_UNIT = "(?:Building|Conference Room|Meeting Room|Room|Floor|Suite|Hall|Office|Level|Block|Gate|Terminal)"
+        private val STRUCTURED_LOCATION_REGEX = Regex(
+            """\b(?:in|at)\s+((?:the\s+)?$PLACE_UNIT\s+[A-Za-z0-9-]+(?:,\s*$PLACE_UNIT\s+[A-Za-z0-9-]+)*)""",
+        )
+        private val VENUE_LOCATION_REGEX = Regex(
+            """\b(?:in|at)\s+(?:the\s+)?((?:[A-Z][\w'&-]*\s+){0,3}(?:Office|Hotel|Airport|Station|Hospital|Clinic|Cafe|Café|Restaurant|Center|Centre|Park|Mall|Campus|Tower|Plaza|Library|Gym))\b""",
+        )
+
+        private val EXPLICIT_ARROW_REGEX = Regex(
+            """([\p{L}\p{N}_][\p{L}\p{N}_ .'-]{0,30}?)\s*-{1,2}\s*\[?([^\]\->\n]{1,24}?)\]?\s*-*>\s*([\p{L}\p{N}_][\p{L}\p{N}_ .'-]{0,30})""",
+        )
+        private val CLAUSE_SPLIT_REGEX = Regex("""\n+|[;；。！？]+|(?<=[.!?])\s+|,\s+|:\s+""")
+        private val RELATIVE_PRONOUN_REGEX = Regex("""^(?:who|which|that)\b""", RegexOption.IGNORE_CASE)
+        private val SUBORDINATOR_REGEX = Regex(
+            """\b(?:once|after|before|when|while|because|until|so|but|then|whereas|unless)\b""",
+            RegexOption.IGNORE_CASE,
+        )
+
+        /** Capitalized multi-word names, e.g. `Elena Vance`, `Helios Display`, `Micro-OLED`. */
+        private val ENTITY_REGEX = Regex("""\b[A-Z][a-z]+(?:(?:\s+|-)[A-Z][A-Za-z]+)+\b""")
+        private val ENTITY_LEADING_STOPWORD_REGEX = Regex(
+            """^(?:(?:The|A|An|This|That|Our|My|Your|Their|Next|Tomorrow|Today|Tonight|Hi|Hello|Dear|Remind|Ask|Tell|Call|Email|Meet|Ping|Send)\s+)+""",
+        )
+        private val ENTITY_BLOCKLIST = setOf("Conference Room", "Meeting Room")
+
+        private val VERB_LABELS: List<Pair<Regex, String>> = listOf(
+            Regex("""\bintroduc\w*""", RegexOption.IGNORE_CASE) to "introduced",
+            Regex("""\breports?\s+to\b""", RegexOption.IGNORE_CASE) to "reports to",
+            Regex("""\b(?:sent|sends?)\b""", RegexOption.IGNORE_CASE) to "sent",
+            Regex("""\bsubmit\w*""", RegexOption.IGNORE_CASE) to "submits",
+            Regex("""\bhand(?:s|ed)?\b""", RegexOption.IGNORE_CASE) to "hands off to",
+            Regex("""\balign\w*""", RegexOption.IGNORE_CASE) to "aligns with",
+            Regex("""\breview\w*""", RegexOption.IGNORE_CASE) to "reviews",
+            Regex("""\b(?:meet|meets|meeting|met)\b""", RegexOption.IGNORE_CASE) to "meets",
+            Regex("""\bcall(?:s|ed)?\b""", RegexOption.IGNORE_CASE) to "calls",
+            Regex("""\bemail\w*""", RegexOption.IGNORE_CASE) to "emails",
+            Regex("""\bquot(?:e|es|ed)\b""", RegexOption.IGNORE_CASE) to "quotes",
+            Regex("""\bapprov\w*""", RegexOption.IGNORE_CASE) to "approves",
+            Regex("""\breleas\w*""", RegexOption.IGNORE_CASE) to "releases",
+            Regex("""\b(?:pays?|paid)\b""", RegexOption.IGNORE_CASE) to "pays",
+            Regex("""\bhir(?:e|es|ed|ing)\b""", RegexOption.IGNORE_CASE) to "hires",
+            Regex("""\bmanag\w*""", RegexOption.IGNORE_CASE) to "manages",
+            Regex("""\bworks?\s+with\b""", RegexOption.IGNORE_CASE) to "works with",
+            Regex("""\bhelp\w*""", RegexOption.IGNORE_CASE) to "helps",
+            Regex("""\bask\w*""", RegexOption.IGNORE_CASE) to "asks",
+            Regex("""\b(?:told|tells?)\b""", RegexOption.IGNORE_CASE) to "tells",
+            Regex("""\binvit\w*""", RegexOption.IGNORE_CASE) to "invites",
+            Regex("""\bjoin\w*""", RegexOption.IGNORE_CASE) to "joins",
+            Regex("""\brepresent\w*""", RegexOption.IGNORE_CASE) to "represents",
+        )
+
+        internal fun clipAtWord(text: String, maxChars: Int): String {
+            if (text.length <= maxChars) return text
+            val hardCut = text.take(maxChars - 1)
+            val lastSpace = hardCut.lastIndexOf(' ')
+            val cut = if (lastSpace >= maxChars / 2) hardCut.substring(0, lastSpace) else hardCut
+            return cut.trimEnd(' ', ',', ';', ':', '-') + "…"
+        }
 
         fun sanitizeRelations(raw: List<RelationTriple>): List<RelationTriple> {
             val byUndirectedKey = LinkedHashMap<Pair<String, String>, RelationTriple>()
             val uniqueNodes = LinkedHashSet<String>()
 
             for (item in raw) {
-                val src = item.source.trim().take(24)
-                val tgt = item.target.trim().take(24)
-                val rel = item.relation.trim().ifEmpty { "关联" }.take(16)
+                val src = item.source.trim().take(32)
+                val tgt = item.target.trim().take(32)
+                val rel = item.relation.trim().ifEmpty { DEFAULT_RELATION }.take(24)
                 if (src.isEmpty() || tgt.isEmpty() || src == tgt) continue
 
                 val key = if (src <= tgt) src to tgt else tgt to src
@@ -533,7 +687,7 @@ class MemoryAnalyzer(
                     val combinedLabel = if (existing.relation == rel) {
                         rel
                     } else {
-                        "${existing.relation}/${rel}".take(18)
+                        "${existing.relation}/$rel".take(24)
                     }
                     byUndirectedKey[key] = existing.copy(
                         relation = combinedLabel,

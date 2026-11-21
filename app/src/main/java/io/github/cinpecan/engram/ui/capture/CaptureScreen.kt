@@ -6,6 +6,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.animateDpAsState
@@ -89,6 +90,7 @@ import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import io.github.cinpecan.engram.data.repository.UnifiedInferenceRouter
 import io.github.cinpecan.engram.domain.agent.CalendarToolExecutor
 import io.github.cinpecan.engram.domain.model.AnalysisSource
 import io.github.cinpecan.engram.domain.model.CalendarProposal
@@ -190,7 +192,7 @@ fun CaptureRoute(
                 is CaptureEffect.ShowMessage -> navigator.showMessage(effect.message)
                 is CaptureEffect.ShowUndoDelete -> navigator.showActionMessage(
                     message = effect.message,
-                    actionLabel = "撤销",
+                    actionLabel = "Undo",
                     onAction = { viewModel.onIntent(CaptureIntent.UndoDeleteMemory) },
                 )
             }
@@ -342,7 +344,7 @@ fun CaptureScreen(
                                         modifier = Modifier.size(15.dp),
                                     )
                                     Text(
-                                        text = "填入多方关系示例",
+                                        text = "Try a relationship note",
                                         style = MaterialTheme.typography.labelMedium,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
@@ -375,7 +377,7 @@ fun CaptureScreen(
                                         modifier = Modifier.size(15.dp),
                                     )
                                     Text(
-                                        text = "填入日程提取示例",
+                                        text = "Try a scheduling note",
                                         style = MaterialTheme.typography.labelMedium,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
@@ -493,7 +495,7 @@ private fun UnifiedCaptureComposer(
                         Box(contentAlignment = Alignment.CenterStart) {
                             if (inputText.isEmpty()) {
                                 Text(
-                                    text = "记下一段闪念…",
+                                    text = "Capture a thought…",
                                     style = MaterialTheme.typography.bodyLarge,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
                                     maxLines = 1,
@@ -519,7 +521,7 @@ private fun UnifiedCaptureComposer(
                         ) {
                             Icon(
                                 imageVector = Icons.Rounded.Close,
-                                contentDescription = "清除输入",
+                                contentDescription = "Clear input",
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
                                 modifier = Modifier.size(16.dp),
                             )
@@ -543,7 +545,7 @@ private fun UnifiedCaptureComposer(
                         } else {
                             MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
                         },
-                        contentDescription = "保存印迹",
+                        contentDescription = "Save memory",
                     ) {
                         Icon(
                             imageVector = Icons.Rounded.ArrowUpward,
@@ -638,7 +640,7 @@ private fun MemoryTimelineCard(
                                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.85f),
                             ) {
                                 Text(
-                                    text = "预置",
+                                    text = "Sample",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp),
@@ -676,7 +678,7 @@ private fun MemoryTimelineCard(
                                     modifier = Modifier.size(11.dp),
                                 )
                                 Text(
-                                    text = streamingPreview?.stageLabel ?: "提炼中…",
+                                    text = streamingPreview?.stageLabel ?: "Distilling…",
                                     style = MaterialTheme.typography.labelSmall,
                                 )
                             }
@@ -689,7 +691,7 @@ private fun MemoryTimelineCard(
                                 } else {
                                     Icons.Outlined.CalendarMonth
                                 },
-                                contentDescription = if (memory.calendarSaved) "已添至日历" else "包含日程",
+                                contentDescription = if (memory.calendarSaved) "Added to calendar" else "Has schedule",
                                 tint = if (memory.calendarSaved) {
                                     MaterialTheme.colorScheme.primary
                                 } else {
@@ -701,7 +703,7 @@ private fun MemoryTimelineCard(
                         if (memory.relations.isNotEmpty()) {
                             Icon(
                                 imageVector = Icons.Outlined.Hub,
-                                contentDescription = "包含脉络",
+                                contentDescription = "Has graph",
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f),
                                 modifier = Modifier.size(13.dp),
                             )
@@ -710,7 +712,7 @@ private fun MemoryTimelineCard(
 
                     Icon(
                         imageVector = if (expanded) Icons.Rounded.KeyboardArrowUp else Icons.Rounded.KeyboardArrowDown,
-                        contentDescription = if (expanded) "收起" else "展开",
+                        contentDescription = if (expanded) "Collapse" else "Expand",
                         tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
                         modifier = Modifier.size(16.dp),
                     )
@@ -720,37 +722,31 @@ private fun MemoryTimelineCard(
             AnimatedContent(
                 targetState = memory.analysisStatus,
                 transitionSpec = {
-                    fadeIn(animationSpec = spring(dampingRatio = 1.0f, stiffness = 1600f)) togetherWith
-                        fadeOut(animationSpec = spring(dampingRatio = 1.0f, stiffness = 1600f))
+                    (
+                        fadeIn(animationSpec = spring(dampingRatio = 1.0f, stiffness = 900f)) togetherWith
+                            fadeOut(animationSpec = spring(dampingRatio = 1.0f, stiffness = 2400f))
+                        ).using(SizeTransform(clip = false) { _, _ -> spring(dampingRatio = 0.9f, stiffness = 420f) })
                 },
+                contentAlignment = Alignment.TopStart,
                 label = "cardAnalysisTransition",
             ) { status ->
                 if (status == MemoryAnalysisStatus.PENDING) {
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    val partial = streamingPreview?.partialText.orEmpty()
+                    if (partial.isNotBlank()) {
+                        // Typewriter preview: the summary decoded so far, rendered exactly like a
+                        // READY card so the final text settles in place without a layout jump.
+                        SummaryBulletList(
+                            summary = partial,
+                            expanded = expanded,
+                        )
+                    } else {
                         Text(
-                            text = memory.summary.ifBlank { memory.content },
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurface,
+                            text = memory.content.replace(WHITESPACE_RUN_REGEX, " "),
+                            style = MaterialTheme.typography.bodyLarge.copy(lineHeight = 23.sp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.62f),
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis,
                         )
-                        val partial = streamingPreview?.partialText.orEmpty()
-                        if (partial.isNotBlank()) {
-                            Surface(
-                                shape = RoundedCornerShape(8.dp),
-                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                                modifier = Modifier.fillMaxWidth(),
-                            ) {
-                                Text(
-                                    text = partial,
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 6,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.padding(10.dp),
-                                )
-                            }
-                        }
                     }
                 } else {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -759,13 +755,7 @@ private fun MemoryTimelineCard(
                             expanded = expanded,
                         )
 
-                        val showTelemetryBadge = memory.telemetryBadge.isNotBlank() &&
-                            memory.analysisSource != AnalysisSource.SEED && (
-                                memory.analysisSource == AnalysisSource.MNN_EDGE ||
-                                    memory.analysisSource == AnalysisSource.CLOUD_SSE ||
-                                    memory.telemetryBadge.contains("云端") ||
-                                    memory.telemetryBadge.contains("体验码")
-                                )
+                        val showTelemetryBadge = shouldShowTelemetryBadge(memory)
                         if (showTelemetryBadge) {
                             Surface(
                                 shape = RoundedCornerShape(8.dp),
@@ -838,7 +828,7 @@ private fun MemoryTimelineCard(
                                     modifier = Modifier.size(14.dp),
                                 )
                                 Text(
-                                    text = "脉络 (${memory.relations.size})",
+                                    text = "Graph (${memory.relations.size})",
                                     style = MaterialTheme.typography.labelMedium,
                                     fontWeight = FontWeight.Medium,
                                 )
@@ -867,7 +857,7 @@ private fun MemoryTimelineCard(
                                 modifier = Modifier.size(14.dp),
                             )
                             Text(
-                                text = "原文",
+                                text = "Source",
                                 style = MaterialTheme.typography.labelMedium,
                             )
                         }
@@ -900,7 +890,7 @@ private fun MemoryTimelineCard(
                         containerColor = Color.Transparent,
                         pressedContainerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.55f),
                         contentColor = MaterialTheme.colorScheme.error,
-                        contentDescription = "删除卡片",
+                        contentDescription = "Delete card",
                     ) {
                         Row(
                             modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
@@ -913,7 +903,7 @@ private fun MemoryTimelineCard(
                                 modifier = Modifier.size(16.dp),
                             )
                             Text(
-                                text = "删除",
+                                text = "Delete",
                                 style = MaterialTheme.typography.labelLarge,
                                 fontWeight = FontWeight.Medium,
                             )
@@ -978,7 +968,7 @@ private fun ScheduleInlineStrip(
         append(proposal.startTimeIso.replace('T', ' ').take(16).let {
             if (it.length > 5) it.drop(5) else it
         })
-        append(" · ${proposal.durationMinutes}分钟")
+        append(" · ${proposal.durationMinutes} min")
         proposal.location?.takeIf { it.isNotBlank() }?.let { loc ->
             append(" · $loc")
         }
@@ -1038,7 +1028,7 @@ private fun ScheduleInlineStrip(
                 },
             ) {
                 Text(
-                    text = if (calendarSaved) "已添至日历" else "添至日历",
+                    text = if (calendarSaved) "Added" else "Add to calendar",
                     style = MaterialTheme.typography.labelMedium,
                     modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
                 )
@@ -1050,8 +1040,33 @@ private fun ScheduleInlineStrip(
 private fun formatTimestamp(epochMillis: Long): String =
     SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()).format(Date(epochMillis))
 
+private val WHITESPACE_RUN_REGEX = Regex("\\s+")
+
+private val FALLBACK_BADGE_PREFIXES = listOf(
+    UnifiedInferenceRouter.BADGE_FALLBACK_UNAUTHORIZED,
+    UnifiedInferenceRouter.BADGE_FALLBACK_QUOTA,
+    UnifiedInferenceRouter.BADGE_FALLBACK_OFFLINE,
+)
+
+/**
+ * Telemetry badges are shown for model-driven runs (MNN / Cloud SSE) and for honest
+ * cloud-degraded local extraction. Seed cards and plain offline rule runs stay badge-free.
+ */
+internal fun shouldShowTelemetryBadge(memory: MemoryItem): Boolean {
+    val badge = memory.telemetryBadge
+    if (badge.isBlank()) return false
+    return when (memory.analysisSource) {
+        AnalysisSource.SEED -> false
+        AnalysisSource.MNN_EDGE, AnalysisSource.CLOUD_SSE -> true
+        AnalysisSource.LOCAL_RULE_FALLBACK -> FALLBACK_BADGE_PREFIXES.any { badge.startsWith(it) }
+    }
+}
+
 private const val SAMPLE_RELATION_NOTE =
-    "项目同步：陈工刚提交了柔性屏模组最新可靠性报告给财务刘敏核验，老李通知样品报价单已发采购合同，需要法务张姐与王总尽快对齐交期违约条款。"
+    "Project sync: Liam Chen sent the latest Micro-OLED reliability report to Priya Nair for review. " +
+        "Marcus Cole says the revised quote is attached to the supply agreement, so Sarah Jenkins and " +
+        "Elena Vance need to align the delivery penalty clause."
 
 private const val SAMPLE_CALENDAR_NOTE =
-    "后天上午10:30在软件园二期5号楼会议室，和陈工、老李对齐柔性屏量产固件测试验收。"
+    "The day after tomorrow at 10:30 AM in Building A, Room 501: sign off the Micro-OLED " +
+        "mass-production firmware test with Liam Chen and Marcus Cole."

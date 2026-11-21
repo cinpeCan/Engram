@@ -16,10 +16,10 @@ class SystemCalendarMatcherTest {
         val target = CalendarAnchorTarget(
             memoryId = "seed-3",
             proposal = CalendarProposal(
-                title = "柔性屏采购合同补充条款评审",
+                title = "Supply Agreement Addendum Review",
                 startTimeIso = "2026-11-19T15:00:00",
                 durationMinutes = 60,
-                location = "B区7楼会议室",
+                location = "Building B, Conference Room 402",
             ),
         )
         val rescheduledStart = LocalDateTime.of(2026, 11, 22, 10, 0)
@@ -30,8 +30,8 @@ class SystemCalendarMatcherTest {
         val rows = listOf(
             CalendarProviderEventRow(
                 eventId = 42L,
-                title = "改期后的终审会",
-                description = "备注调整 [engram:seed-3]",
+                title = "Rescheduled final review",
+                description = "Notes updated [engram:seed-3]",
                 dtStartMillis = rescheduledStart,
             ),
         )
@@ -45,7 +45,7 @@ class SystemCalendarMatcherTest {
         val target = CalendarAnchorTarget(
             memoryId = "mem-2",
             proposal = CalendarProposal(
-                title = "固件验收会",
+                title = "Firmware sign-off",
                 startTimeIso = "2026-11-19T10:30:00",
                 durationMinutes = 60,
             ),
@@ -58,7 +58,7 @@ class SystemCalendarMatcherTest {
         val rows = listOf(
             CalendarProviderEventRow(
                 eventId = 88L,
-                title = "  固件验收会 ",
+                title = "  Firmware sign-off ",
                 description = "",
                 dtStartMillis = nearbyStart,
             ),
@@ -73,7 +73,7 @@ class SystemCalendarMatcherTest {
         val target = CalendarAnchorTarget(
             memoryId = "mem-3",
             proposal = CalendarProposal(
-                title = "法务条款对齐",
+                title = "Legal clause alignment",
                 startTimeIso = "2026-11-19T15:00:00",
                 durationMinutes = 60,
             ),
@@ -86,13 +86,13 @@ class SystemCalendarMatcherTest {
         val rows = listOf(
             CalendarProviderEventRow(
                 eventId = 91L,
-                title = "法务条款对齐",
+                title = "Legal clause alignment",
                 description = "",
                 dtStartMillis = distantStart,
             ),
             CalendarProviderEventRow(
                 eventId = 92L,
-                title = "无关日程",
+                title = "Unrelated event",
                 description = "[engram:other-id]",
                 dtStartMillis = distantStart,
             ),

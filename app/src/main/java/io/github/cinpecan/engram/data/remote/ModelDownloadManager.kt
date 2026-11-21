@@ -241,7 +241,7 @@ class ModelDownloadManager internal constructor(
                 val current = _downloadStates.value[model.id]
                 if (current !is ModelDownloadState.Paused) {
                     _downloadStates.update {
-                        it + (model.id to ModelDownloadState.Failed(e.message ?: "下载失败"))
+                        it + (model.id to ModelDownloadState.Failed(e.message ?: "Download failed"))
                     }
                 }
             } finally {
@@ -351,7 +351,7 @@ class ModelDownloadManager internal constructor(
                         }
 
                         if (expectedFileBytes != null && expectedFileBytes > 0L && fileWritten != expectedFileBytes) {
-                            throw IOException("文件 ${fileSpec.name} 下载未完整 ($fileWritten/$expectedFileBytes)")
+                            throw IOException("Incomplete download for ${fileSpec.name} ($fileWritten/$expectedFileBytes)")
                         }
 
                         completedDigest = finalizeCompletedPart(partFile, finalFile, fileSpec).orEmpty()
@@ -371,7 +371,7 @@ class ModelDownloadManager internal constructor(
                 lastError = e
             }
         }
-        throw lastError ?: IOException("下载失败：${fileSpec.name}")
+        throw lastError ?: IOException("Download failed: ${fileSpec.name}")
     }
 
     fun pause(modelId: String) {
@@ -393,7 +393,7 @@ class ModelDownloadManager internal constructor(
         val digest = computeSha256(partFile)
         if (fileSpec.sha256 != null && digest != fileSpec.sha256) {
             partFile.delete()
-            error("SHA-256 校验失败：${fileSpec.name}")
+            error("SHA-256 mismatch: ${fileSpec.name}")
         }
         if (finalFile.exists()) {
             finalFile.delete()

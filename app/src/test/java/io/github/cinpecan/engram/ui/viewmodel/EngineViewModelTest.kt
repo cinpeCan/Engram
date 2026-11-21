@@ -164,7 +164,7 @@ class EngineViewModelTest {
 
         vm.onIntent(EngineIntent.SyncMemories)
         val syncEffect = vm.effects.first() as EngineEffect.ShowMessage
-        assertTrue(syncEffect.message.contains("已保存配置"))
+        assertTrue(syncEffect.message.contains("Settings saved"))
         val savedPrefs = prefsRepo.preferencesFlow.first { it.serverBaseUrl == "http://127.0.0.1:9" }
         assertEquals("http://127.0.0.1:9", savedPrefs.serverBaseUrl)
         assertEquals("team-room", savedPrefs.syncKey)
@@ -174,7 +174,7 @@ class EngineViewModelTest {
 
         vm.onIntent(EngineIntent.LoadModel(targetModel))
         val rejectEffect = vm.effects.first() as EngineEffect.ShowMessage
-        assertTrue(rejectEffect.message.contains("请先下载模型文件"))
+        assertTrue(rejectEffect.message.contains("Download the model first"))
         assertEquals(0, engine.loadCalls)
         assertEquals(EngineState.Unloaded, vm.runtimeStatus.value.engineState)
 
@@ -188,7 +188,7 @@ class EngineViewModelTest {
 
         vm.onIntent(EngineIntent.LoadModel(targetModel))
         val loadEffect = vm.effects.first() as EngineEffect.ShowMessage
-        assertTrue(loadEffect.message.contains("模型已加载就绪"))
+        assertTrue(loadEffect.message.contains("Model loaded"))
         assertEquals(1, engine.loadCalls)
         assertEquals(targetModel.id, prefsRepo.preferencesFlow.first().selectedModelId)
         assertTrue(vm.runtimeStatus.value.engineState is EngineState.Ready)
@@ -252,7 +252,7 @@ class EngineViewModelTest {
         // 401 without demo token
         vm.onIntent(EngineIntent.SyncMemories)
         val msg401 = (vm.effects.first() as EngineEffect.ShowMessage).message
-        assertTrue(msg401.contains("有效体验码"))
+        assertTrue(msg401.contains("valid access token"))
         assertFalse(vm.isSyncing.first { !it })
 
         // 429 quota cap
@@ -261,7 +261,7 @@ class EngineViewModelTest {
         vm.onIntent(EngineIntent.UpdateSyncKeyInput(token))
         vm.onIntent(EngineIntent.SyncMemories)
         val msg429 = (vm.effects.first() as EngineEffect.ShowMessage).message
-        assertTrue(msg429.contains("额度已达上限"))
+        assertTrue(msg429.contains("Cloud quota reached"))
         assertFalse(vm.isSyncing.first { !it })
 
         // Network/DNS failure must never echo raw hostname in UI notice
@@ -269,6 +269,6 @@ class EngineViewModelTest {
         vm.onIntent(EngineIntent.SyncMemories)
         val msgNet = (vm.effects.first() as EngineEffect.ShowMessage).message
         assertFalse(msgNet.contains("secret-internal-host.invalid"))
-        assertTrue(msgNet.contains("暂未连上同步服务"))
+        assertTrue(msgNet.contains("Can't reach the sync service"))
     }
 }

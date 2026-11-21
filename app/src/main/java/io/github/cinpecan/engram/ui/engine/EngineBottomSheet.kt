@@ -158,7 +158,7 @@ fun EngineBottomSheetContent(
                 modifier = Modifier.size(20.dp),
             )
             Text(
-                text = "推理与多端同步",
+                text = "Inference & Sync",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
             )
@@ -177,7 +177,7 @@ fun EngineBottomSheetContent(
                     )
                 },
             ) {
-                Text("端侧离线")
+                Text("On-device")
             }
             SegmentedButton(
                 selected = inferenceMode == InferenceMode.CLOUD_COLLAB,
@@ -191,7 +191,7 @@ fun EngineBottomSheetContent(
                     )
                 },
             ) {
-                Text("云端协同")
+                Text("Cloud")
             }
         }
 
@@ -212,7 +212,7 @@ fun EngineBottomSheetContent(
 
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text(
-                text = "多设备记忆同步",
+                text = "Multi-device sync",
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -225,7 +225,7 @@ fun EngineBottomSheetContent(
             )
 
             Text(
-                text = "同步码 / 云端体验码",
+                text = "Sync code / access token",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -261,7 +261,7 @@ fun EngineBottomSheetContent(
                     } else {
                         MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
                     },
-                    contentDescription = "同步记忆",
+                    contentDescription = "Sync memories",
                 ) {
                     if (isSpinning) {
                         CircularProgressIndicator(
@@ -272,7 +272,7 @@ fun EngineBottomSheetContent(
                     } else {
                         Icon(
                             imageVector = Icons.Rounded.Sync,
-                            contentDescription = "同步",
+                            contentDescription = "Sync",
                             modifier = Modifier.size(19.dp),
                         )
                     }
@@ -335,22 +335,22 @@ private fun resolveStatusBanner(
     val errorFg = MaterialTheme.colorScheme.onErrorContainer
 
     return when (cloudSessionState) {
-        CloudSessionState.Verifying -> StatusBanner("正在校验体验码…", neutralBg, neutralFg)
-        CloudSessionState.InvalidToken -> StatusBanner("体验码无效或已过期", errorBg, errorFg)
-        CloudSessionState.QuotaExhausted -> StatusBanner("云端体验额度已满", errorBg, errorFg)
-        CloudSessionState.Unreachable -> StatusBanner("暂未连上云端网关 · 点此重试", errorBg, errorFg)
+        CloudSessionState.Verifying -> StatusBanner("Verifying access token…", neutralBg, neutralFg)
+        CloudSessionState.InvalidToken -> StatusBanner("Invalid or expired access token", errorBg, errorFg)
+        CloudSessionState.QuotaExhausted -> StatusBanner("Cloud quota reached", errorBg, errorFg)
+        CloudSessionState.Unreachable -> StatusBanner("Can't reach the cloud gateway · Tap to retry", errorBg, errorFg)
         is CloudSessionState.Ready -> when {
             !latestNotice.isNullOrBlank() -> StatusBanner(latestNotice, readyBg, readyFg)
             cloudSessionState.remainingQuota != null -> StatusBanner(
-                "云端就绪 · 剩余 ${cloudSessionState.remainingQuota} 次提炼",
+                "Cloud ready · ${cloudSessionState.remainingQuota} distillations left",
                 readyBg,
                 readyFg,
             )
-            else -> StatusBanner("云端就绪", readyBg, readyFg)
+            else -> StatusBanner("Cloud ready", readyBg, readyFg)
         }
         CloudSessionState.IdleUnconfigured -> when {
             !latestNotice.isNullOrBlank() -> StatusBanner(latestNotice, neutralBg, neutralFg)
-            syncKeyInput.trim().isNotEmpty() -> StatusBanner("请继续输入完整体验码", neutralBg, neutralFg)
+            syncKeyInput.trim().isNotEmpty() -> StatusBanner("Keep typing the full access token", neutralBg, neutralFg)
             !engineError.isNullOrBlank() -> StatusBanner(engineError, errorBg, errorFg)
             else -> null
         }
@@ -423,7 +423,7 @@ private fun GatewayEndpointField(
                                     color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.72f),
                                 ) {
                                     Text(
-                                        text = "默认已就绪",
+                                        text = "Default",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.onPrimaryContainer,
                                         modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
@@ -433,9 +433,9 @@ private fun GatewayEndpointField(
                         } else if (value.isEmpty()) {
                             Text(
                                 text = if (hasBundledDefaultEndpoint) {
-                                    "自定义地址（可选）"
+                                    "Custom endpoint (optional)"
                                 } else {
-                                    "服务器地址（如 http://127.0.0.1:8787）"
+                                    "Server URL (e.g. http://127.0.0.1:8787)"
                                 },
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f),
@@ -455,7 +455,7 @@ private fun GatewayEndpointField(
                 ) {
                     Icon(
                         imageVector = Icons.Rounded.Close,
-                        contentDescription = "清除地址",
+                        contentDescription = "Clear server URL",
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(16.dp),
                     )
@@ -510,7 +510,7 @@ private fun MaskedSyncKeyField(
                     Box(contentAlignment = Alignment.CenterStart) {
                         if (value.isEmpty()) {
                             Text(
-                                text = "同步码 / 云端体验码",
+                                text = "Sync code / access token",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f),
                                 maxLines = 1,
@@ -533,7 +533,7 @@ private fun MaskedSyncKeyField(
                         } else {
                             Icons.Rounded.Visibility
                         },
-                        contentDescription = if (revealSecret) "隐藏体验码" else "显示体验码",
+                        contentDescription = if (revealSecret) "Hide access token" else "Show access token",
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(17.dp),
                     )
@@ -544,7 +544,7 @@ private fun MaskedSyncKeyField(
                 ) {
                     Icon(
                         imageVector = Icons.Rounded.Close,
-                        contentDescription = "清除体验码",
+                        contentDescription = "Clear access token",
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(16.dp),
                     )
@@ -570,10 +570,10 @@ private fun FramelessModelRow(
     val approxMb = (item.model.sizeBytes / (1024 * 1024)).coerceAtLeast(1)
 
     val subtitle = when (downloadState) {
-        ModelDownloadState.Idle -> "离线模型 · 约 ${approxMb} MB（魔搭直连）"
+        ModelDownloadState.Idle -> "Offline model · ~${approxMb} MB (direct CDN)"
         is ModelDownloadState.Downloading -> {
             val pct = (downloadState.progress * 100).toInt()
-            "下载中 $pct% · ${downloadState.currentFileName}"
+            "Downloading $pct% · ${downloadState.currentFileName}"
         }
         is ModelDownloadState.Paused -> {
             val pct = if (downloadState.totalBytes > 0L) {
@@ -581,26 +581,26 @@ private fun FramelessModelRow(
             } else {
                 0
             }
-            "已暂停 · $pct%"
+            "Paused · $pct%"
         }
         is ModelDownloadState.Completed -> when {
-            isLoading -> "正在加载至内存…"
-            isGenerating -> "端侧推理中…"
+            isLoading -> "Loading into memory…"
+            isGenerating -> "Running on-device…"
             isReady -> {
                 if (engineState.modelFootprintBytes > 0L) {
                     String.format(
                         Locale.US,
-                        "已就绪 · 占用 +%.0f MB",
+                        "Ready · +%.0f MB",
                         engineState.modelFootprintBytes / (1024.0 * 1024.0),
                     )
                 } else {
-                    "已就绪"
+                    "Ready"
                 }
             }
-            runtimeStatus.isBackendAvailable -> "已下载 · 待命"
-            else -> "当前环境暂不支持原生库"
+            runtimeStatus.isBackendAvailable -> "Downloaded · Idle"
+            else -> "Native runtime unavailable on this build"
         }
-        is ModelDownloadState.Failed -> "下载失败：${downloadState.message}"
+        is ModelDownloadState.Failed -> "Download failed: ${downloadState.message}"
     }
 
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -654,7 +654,7 @@ private fun FramelessModelRow(
                                 contentDescription = null,
                                 modifier = Modifier.size(15.dp),
                             )
-                            Text("释放内存", style = MaterialTheme.typography.labelLarge)
+                            Text("Free memory", style = MaterialTheme.typography.labelLarge)
                         }
                     }
                 }
@@ -678,7 +678,7 @@ private fun FramelessModelRow(
                         },
                     ) {
                         Text(
-                            text = if (isLoading) "加载中" else "加载模型",
+                            text = if (isLoading) "Loading" else "Load model",
                             style = MaterialTheme.typography.labelLarge,
                             modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
                         )
@@ -688,19 +688,19 @@ private fun FramelessModelRow(
                     val (icon, label, containerColor, contentColor) = when (downloadState) {
                         is ModelDownloadState.Downloading -> Quadruple(
                             Icons.Rounded.Pause,
-                            "暂停",
+                            "Pause",
                             MaterialTheme.colorScheme.secondaryContainer,
                             MaterialTheme.colorScheme.onSecondaryContainer,
                         )
                         is ModelDownloadState.Paused -> Quadruple(
                             Icons.Rounded.PlayArrow,
-                            "继续",
+                            "Resume",
                             MaterialTheme.colorScheme.primary,
                             MaterialTheme.colorScheme.onPrimary,
                         )
                         else -> Quadruple(
                             Icons.Rounded.CloudDownload,
-                            "下载",
+                            "Download",
                             MaterialTheme.colorScheme.primary,
                             MaterialTheme.colorScheme.onPrimary,
                         )

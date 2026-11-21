@@ -73,9 +73,9 @@ internal class BottomSheetScene<T : Any>(
             dragHandle = {
                 if (expandable) {
                     val toggleLabel = if (sheetState.currentValue == SheetValue.Expanded) {
-                        "收起至半屏"
+                        "Collapse to half screen"
                     } else {
-                        "展开至全屏"
+                        "Expand to full screen"
                     }
                     Box(
                         modifier = Modifier
@@ -119,7 +119,7 @@ internal class BottomSheetScene<T : Any>(
                             containerColor = Color.Transparent,
                             pressedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
                             contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                            contentDescription = "关闭弹窗",
+                            contentDescription = "Close",
                         ) {
                             Icon(
                                 imageVector = Icons.Rounded.Close,

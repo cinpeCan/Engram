@@ -86,7 +86,7 @@ class UnifiedInferenceRouterTest {
     @Test
     fun offlineModeStreamsRealMnnOrFallsBackHonestlyToRules() = runTest {
         val validJson = """
-            {"summary":"老李向张姐对齐采购合同条款。","tags":["商务合同"],"calendarProposal":null,"relations":[{"source":"老李","target":"张姐","relation":"对齐条款","bidirectional":true}]}
+            {"summary":"Marcus aligns the supply agreement clauses with Sarah.","tags":["Legal"],"calendarProposal":null,"relations":[{"source":"Marcus Cole","target":"Sarah Jenkins","relation":"aligns clauses","bidirectional":true}]}
         """.trimIndent()
         val realEdge = FakeEdgeEngine(
             isBackendAvailable = true,
@@ -96,7 +96,7 @@ class UnifiedInferenceRouterTest {
         val router = UnifiedInferenceRouter(realEdge, CloudSseClient(buildMockSseOkHttp(null)), MemoryAnalyzer())
 
         val events = router.distillMemory(
-            content = "老李和法务张姐对齐合同条款",
+            content = "Marcus Cole and Sarah Jenkins align the contract clauses",
             nowMillis = 1_700_000_000_000L,
             mode = InferenceMode.OFFLINE_EDGE,
             serverBaseUrl = "http://127.0.0.1:8787",
@@ -106,10 +106,10 @@ class UnifiedInferenceRouterTest {
         assertTrue(events.any { it is DistillationEvent.StreamingPreview })
         val completed = events.filterIsInstance<DistillationEvent.Completed>().single()
         assertEquals(AnalysisSource.MNN_EDGE, completed.source)
-        assertTrue(completed.telemetryBadge.contains("MNN 0.5B"))
+        assertTrue(completed.telemetryBadge.startsWith("Qwen2.5 0.5B · MNN"))
         assertTrue(completed.telemetryBadge.contains("TTFT 140ms"))
 
-        // When native MNN backend is unavailable, never pretend MNN ran
+        // When the native MNN backend is unavailable, never pretend MNN ran
         val unavailableEdge = FakeEdgeEngine(
             isBackendAvailable = false,
             initialState = EngineState.Unloaded,
@@ -120,7 +120,7 @@ class UnifiedInferenceRouterTest {
             MemoryAnalyzer(),
         )
         val fallbackEvents = fallbackRouter.distillMemory(
-            content = "老李和法务张姐对齐合同条款",
+            content = "Marcus Cole and Sarah Jenkins align the contract clauses",
             nowMillis = 1_700_000_000_000L,
             mode = InferenceMode.OFFLINE_EDGE,
             serverBaseUrl = "http://127.0.0.1:8787",
@@ -134,11 +134,11 @@ class UnifiedInferenceRouterTest {
 
     @Test
     fun cloudModeStreamsSseAndFallsBackGracefullyOnHttpError() = runTest {
-        val payloadJson = """{"summary":"明日评审补充条款。","tags":["日程跟进"],"calendarProposal":null,"relations":[]}"""
+        val payloadJson = """{"summary":"Review the addendum tomorrow.","tags":["Follow-up"],"calendarProposal":null,"relations":[]}"""
         val escaped = payloadJson.replace("\"", "\\\"")
         val sseStream = buildString {
-            append("""data: {"delta":"$escaped","done":false,"model":"qwen-turbo","latencyMs":12}""").append("\n\n")
-            append("""data: {"delta":"","done":true,"model":"qwen-turbo","latencyMs":48}""").append("\n\n")
+            append("""data: {"delta":"$escaped","done":false,"model":"gemini-3.5-flash-lite","latencyMs":12}""").append("\n\n")
+            append("""data: {"delta":"","done":true,"model":"gemini-3.5-flash-lite","latencyMs":48}""").append("\n\n")
             append("data: [DONE]\n\n")
         }
 
@@ -146,7 +146,7 @@ class UnifiedInferenceRouterTest {
         val cloudRouter = UnifiedInferenceRouter(edge, CloudSseClient(buildMockSseOkHttp(sseStream)), MemoryAnalyzer())
 
         val events = cloudRouter.distillMemory(
-            content = "明天评审补充条款",
+            content = "Review the addendum tomorrow",
             nowMillis = 1_700_000_000_000L,
             mode = InferenceMode.CLOUD_COLLAB,
             serverBaseUrl = "http://127.0.0.1:8787",
@@ -154,7 +154,7 @@ class UnifiedInferenceRouterTest {
 
         val completed = events.filterIsInstance<DistillationEvent.Completed>().single()
         assertEquals(AnalysisSource.CLOUD_SSE, completed.source)
-        assertTrue(completed.telemetryBadge.startsWith("Cloud SSE"))
+        assertTrue(completed.telemetryBadge.startsWith("Gemini 3.5 Flash-Lite · TTFT "))
 
         // 503 unconfigured gateway should degrade to local rule fallback transparently
         val unconfiguredRouter = UnifiedInferenceRouter(
@@ -163,7 +163,7 @@ class UnifiedInferenceRouterTest {
             MemoryAnalyzer(),
         )
         val degradedEvents = unconfiguredRouter.distillMemory(
-            content = "明天评审补充条款",
+            content = "Review the addendum tomorrow",
             nowMillis = 1_700_000_000_000L,
             mode = InferenceMode.CLOUD_COLLAB,
             serverBaseUrl = "http://127.0.0.1:8787",
@@ -171,7 +171,7 @@ class UnifiedInferenceRouterTest {
 
         val degradedCompleted = degradedEvents.filterIsInstance<DistillationEvent.Completed>().single()
         assertEquals(AnalysisSource.LOCAL_RULE_FALLBACK, degradedCompleted.source)
-        assertEquals("云端未连接 · 已用本地提炼", degradedCompleted.telemetryBadge)
+        assertEquals("Cloud offline · Local extraction", degradedCompleted.telemetryBadge)
     }
 
     @Test
@@ -198,7 +198,7 @@ class UnifiedInferenceRouterTest {
 
         // Placeholder syncKey omits Authorization header and 401 maps to honest badge
         val events401 = router.distillMemory(
-            content = "明天评审补充条款",
+            content = "Review the addendum tomorrow",
             nowMillis = 1_700_000_000_000L,
             mode = InferenceMode.CLOUD_COLLAB,
             serverBaseUrl = "http://127.0.0.1:8787",
@@ -207,13 +207,13 @@ class UnifiedInferenceRouterTest {
         assertEquals(listOf<String?>(null), capturedAuthHeaders)
         val completed401 = events401.filterIsInstance<DistillationEvent.Completed>().single()
         assertEquals(AnalysisSource.LOCAL_RULE_FALLBACK, completed401.source)
-        assertEquals("需有效体验码 · 已用本地提炼", completed401.telemetryBadge)
+        assertEquals("Access token required · Local extraction", completed401.telemetryBadge)
 
         // Valid demo token sends Authorization: Bearer <token> and 429 maps to quota badge
         statusToReturn[0] = 429
         val token = listOf("eng", "69200000", "team01", "b".repeat(24)).joinToString("_")
         val events429 = router.distillMemory(
-            content = "明天评审补充条款",
+            content = "Review the addendum tomorrow",
             nowMillis = 1_700_000_000_000L,
             mode = InferenceMode.CLOUD_COLLAB,
             serverBaseUrl = "http://127.0.0.1:8787",
@@ -222,11 +222,11 @@ class UnifiedInferenceRouterTest {
         assertEquals("Bearer $token", capturedAuthHeaders.last())
         val completed429 = events429.filterIsInstance<DistillationEvent.Completed>().single()
         assertEquals(AnalysisSource.LOCAL_RULE_FALLBACK, completed429.source)
-        assertEquals("云端体验额度已满 · 已用本地提炼", completed429.telemetryBadge)
+        assertEquals("Cloud quota reached · Local extraction", completed429.telemetryBadge)
 
         // When real MNN edge model is ready, cloud 401 seamlessly falls back to MNN_EDGE first
         val validJson = """
-            {"summary":"明日评审补充条款。","tags":["日程跟进"],"calendarProposal":null,"relations":[]}
+            {"summary":"Review the addendum tomorrow.","tags":["Follow-up"],"calendarProposal":null,"relations":[]}
         """.trimIndent()
         val readyEdge = FakeEdgeEngine(
             isBackendAvailable = true,
@@ -236,7 +236,7 @@ class UnifiedInferenceRouterTest {
         statusToReturn[0] = 401
         val edgeFallbackRouter = UnifiedInferenceRouter(readyEdge, CloudSseClient(mockHttp), MemoryAnalyzer())
         val edgeEvents = edgeFallbackRouter.distillMemory(
-            content = "明天评审补充条款",
+            content = "Review the addendum tomorrow",
             nowMillis = 1_700_000_000_000L,
             mode = InferenceMode.CLOUD_COLLAB,
             serverBaseUrl = "http://127.0.0.1:8787",
@@ -245,6 +245,49 @@ class UnifiedInferenceRouterTest {
         assertTrue(readyEdge.generateCalled)
         val edgeCompleted = edgeEvents.filterIsInstance<DistillationEvent.Completed>().single()
         assertEquals(AnalysisSource.MNN_EDGE, edgeCompleted.source)
-        assertTrue(edgeCompleted.telemetryBadge.startsWith("云端降级 · MNN"))
+        assertTrue(edgeCompleted.telemetryBadge.startsWith("Cloud fallback · Qwen2.5 0.5B · TTFT "))
+    }
+
+    @Test
+    fun streamingPreviewsExposeOnlyDecodedSummaryText() = runTest {
+        val payloadJson = """{"summary":"• Sarah aligns the clause\n• Priya releases the deposit","tags":["Legal"],"calendarProposal":null,"relations":[]}"""
+        val chunks = payloadJson.chunked(9)
+        val sseStream = buildString {
+            for (piece in chunks) {
+                val escaped = piece.replace("\\", "\\\\").replace("\"", "\\\"")
+                append("data: {\"delta\":\"$escaped\",\"done\":false,\"model\":\"gemini-3.5-flash-lite\",\"latencyMs\":5}").append("\n\n")
+            }
+            append("data: {\"delta\":\"\",\"done\":true,\"model\":\"gemini-3.5-flash-lite\",\"latencyMs\":40}").append("\n\n")
+            append("data: [DONE]\n\n")
+        }
+        val edge = FakeEdgeEngine(isBackendAvailable = false, initialState = EngineState.Unloaded)
+        val router = UnifiedInferenceRouter(edge, CloudSseClient(buildMockSseOkHttp(sseStream)), MemoryAnalyzer())
+
+        val events = router.distillMemory(
+            content = "Sarah aligns the clause; Priya releases the deposit",
+            nowMillis = 1_700_000_000_000L,
+            mode = InferenceMode.CLOUD_COLLAB,
+            serverBaseUrl = "http://127.0.0.1:8787",
+        ).toList()
+
+        val previews = events.filterIsInstance<DistillationEvent.StreamingPreview>()
+        assertTrue(previews.isNotEmpty())
+        assertTrue(previews.none { it.partialText.contains('{') || it.partialText.contains("\"summary\"") })
+        assertTrue(previews.any { it.stageLabel == UnifiedInferenceRouter.STAGE_CLOUD_STREAMING && it.partialText.isNotEmpty() })
+        val last = previews.last()
+        assertEquals(UnifiedInferenceRouter.STAGE_MAPPING_RELATIONS, last.stageLabel)
+        assertEquals("• Sarah aligns the clause\n• Priya releases the deposit", last.partialText)
+
+        val completed = events.filterIsInstance<DistillationEvent.Completed>().single()
+        assertEquals(AnalysisSource.CLOUD_SSE, completed.source)
+        assertTrue(completed.telemetryBadge.startsWith("Gemini 3.5 Flash-Lite · TTFT "))
+    }
+
+    @Test
+    fun humanizesModelNames() {
+        assertEquals("Gemini 3.5 Flash-Lite", UnifiedInferenceRouter.humanizeModelName("gemini-3.5-flash-lite"))
+        assertEquals("Gemini 2.5 Pro", UnifiedInferenceRouter.humanizeModelName("gemini-2.5-pro"))
+        assertEquals("custom-llm", UnifiedInferenceRouter.humanizeModelName("custom-llm"))
+        assertEquals("Qwen2.5 0.5B", UnifiedInferenceRouter.humanizeEdgeModelName("qwen2.5-0.5b-instruct-mnn"))
     }
 }

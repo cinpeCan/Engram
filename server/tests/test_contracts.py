@@ -67,26 +67,26 @@ def test_multi_device_sync_merges_by_timestamp_and_isolates_sync_keys(tmp_path, 
         "memories": [
             {
                 "id": "mem_1",
-                "content": "明天下午3点在软件园B座和张姐对齐合同。",
-                "summary": "• 明日 15:00 · 软件园B座\n• 与张姐对齐合同",
-                "tags": ["商务合同", "日程提醒"],
+                "content": "Tomorrow 3pm at Software Park Building B, align the contract with Ms. Zhang.",
+                "summary": "• Tomorrow 15:00 · Software Park B\n• Align contract with Ms. Zhang",
+                "tags": ["contract", "reminder"],
                 "createdAtMillis": 1700000000000,
                 "updatedAtMillis": 1700000001000,
                 "analysisStatus": "READY",
                 "calendarProposal": {
-                    "title": "合同对齐",
+                    "title": "Contract alignment",
                     "startTimeIso": "2026-11-19T15:00:00",
                     "durationMinutes": 60,
-                    "location": "软件园B座",
+                    "location": "Software Park Building B",
                 },
                 "calendarSaved": False,
                 "analysisSource": "MNN_EDGE",
                 "telemetryBadge": "MNN 0.5B · TTFT 120ms · 32.0 tok/s",
                 "relations": [
                     {
-                        "source": "张姐",
-                        "target": "合同",
-                        "relation": "对齐条款",
+                        "source": "Ms. Zhang",
+                        "target": "Contract",
+                        "relation": "aligns terms",
                         "bidirectional": False,
                     }
                 ],
@@ -107,8 +107,8 @@ def test_multi_device_sync_merges_by_timestamp_and_isolates_sync_keys(tmp_path, 
         "memories": [
             {
                 "id": "mem_1",
-                "content": "明天下午3点在软件园B座和张姐对齐合同。",
-                "summary": "旧摘要不应覆盖",
+                "content": "Tomorrow 3pm at Software Park Building B, align the contract with Ms. Zhang.",
+                "summary": "Stale summary must not overwrite",
                 "tags": [],
                 "createdAtMillis": 1700000000000,
                 "updatedAtMillis": 1700000000500,
@@ -121,9 +121,9 @@ def test_multi_device_sync_merges_by_timestamp_and_isolates_sync_keys(tmp_path, 
             },
             {
                 "id": "mem_2",
-                "content": "陈工提交烧屏验收报告",
-                "summary": "陈工提交烧屏验收报告",
-                "tags": ["项目推进"],
+                "content": "Chen submits the burn-in acceptance report",
+                "summary": "Chen submits the burn-in acceptance report",
+                "tags": ["project"],
                 "createdAtMillis": 1700000005000,
                 "updatedAtMillis": 1700000005000,
                 "analysisStatus": "READY",
@@ -163,9 +163,9 @@ def test_analyze_stream_returns_503_when_api_key_missing(monkeypatch) -> None:
     resp = client.post(
         "/api/v1/analyze/stream",
         json={
-            "content": "明天下午3点和张姐对齐柔性屏采购合同。",
+            "content": "Tomorrow 3pm, align the flexible display purchase contract with Ms. Zhang.",
             "nowIso": "2026-11-18T09:00:00",
-            "model": "qwen-turbo",
+            "model": "gemini-3.5-flash-lite",
         },
     )
     assert resp.status_code == 503
@@ -173,19 +173,19 @@ def test_analyze_stream_returns_503_when_api_key_missing(monkeypatch) -> None:
 
 def test_analyze_stream_sse_matches_contract_and_analysis_schema(monkeypatch) -> None:
     analysis_payload = {
-        "summary": "• 明日 15:00 · 软件园三期B区7楼会议室\n• 与法务张姐对齐采购合同补充条款",
-        "tags": ["法务商务", "日程跟进"],
+        "summary": "• Tomorrow 15:00 · Software Park III, B7 meeting room\n• Review contract addendum with legal (Ms. Zhang)",
+        "tags": ["legal", "follow-up"],
         "calendarProposal": {
-            "title": "柔性屏采购合同补充条款评审",
+            "title": "Flexible display contract addendum review",
             "startTimeIso": "2026-11-19T15:00:00",
             "durationMinutes": 60,
-            "location": "软件园三期B区7楼会议室",
+            "location": "Software Park III, B7 meeting room",
         },
         "relations": [
             {
-                "source": "法务张姐",
-                "target": "采购合同",
-                "relation": "过补充条款",
+                "source": "Ms. Zhang (legal)",
+                "target": "Purchase contract",
+                "relation": "reviews addendum",
                 "bidirectional": False,
             }
         ],
@@ -229,7 +229,7 @@ def test_analyze_stream_sse_matches_contract_and_analysis_schema(monkeypatch) ->
     monkeypatch.delenv("ENGRAM_DEMO_SIGNING_SECRET", raising=False)
     monkeypatch.setenv("ENGRAM_CLOUD_API_KEY", "sk-test-valid")
     monkeypatch.setenv("ENGRAM_CLOUD_BASE_URL", "https://example.invalid/v1")
-    monkeypatch.setenv("ENGRAM_CLOUD_MODEL", "qwen-turbo")
+    monkeypatch.setenv("ENGRAM_CLOUD_MODEL", "gemini-3.5-flash-lite")
     monkeypatch.setattr("app.main.httpx.AsyncClient", MockAsyncClient)
 
     sse_schema = _load_schema("analysis-sse.schema.json")
@@ -251,9 +251,9 @@ def test_analyze_stream_sse_matches_contract_and_analysis_schema(monkeypatch) ->
     )
 
     request_body = {
-        "content": "明天下午15:00在软件园三期B区7楼会议室，和法务张姐过一遍柔性屏采购合同补充条款。",
+        "content": "Tomorrow 15:00 in Software Park III B7 meeting room, review the flexible display contract addendum with Ms. Zhang from legal.",
         "nowIso": "2026-11-18T09:00:00",
-        "model": "qwen-turbo",
+        "model": "gemini-3.5-flash-lite",
     }
     req_validator.validate(request_body)
 
@@ -311,9 +311,9 @@ def test_analyze_stream_emits_error_chunk_when_upstream_fails(monkeypatch) -> No
     )
 
     request_body = {
-        "content": "合同卡在法务张姐条款对齐。",
+        "content": "Contract is blocked on term alignment with legal.",
         "nowIso": "2026-11-18T09:00:00",
-        "model": "qwen-turbo",
+        "model": "gemini-3.5-flash-lite",
     }
 
     chunks = []
@@ -345,14 +345,14 @@ def test_vertex_ai_stream_distills_sse_truncates_input_and_handles_errors(monkey
     monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "test-gcp-project")
 
     analysis_payload = {
-        "summary": "• 明日 15:00 · 软件园B座\n• 与张姐对齐合同条款",
-        "tags": ["商务合同", "日程跟进"],
+        "summary": "• Tomorrow 15:00 · Software Park B\n• Align contract terms with Ms. Zhang",
+        "tags": ["contract", "follow-up"],
         "calendarProposal": None,
         "relations": [
             {
-                "source": "张姐",
-                "target": "合同条款",
-                "relation": "对齐",
+                "source": "Ms. Zhang",
+                "target": "Contract terms",
+                "relation": "aligns",
                 "bidirectional": True,
             }
         ],
@@ -406,7 +406,7 @@ def test_vertex_ai_stream_distills_sse_truncates_input_and_handles_errors(monkey
         }
     )
 
-    long_content = "记" * 4500
+    long_content = "n" * 4500
     chunks = []
     saw_done_marker = False
     with client.stream(
@@ -438,7 +438,7 @@ def test_vertex_ai_stream_distills_sse_truncates_input_and_handles_errors(monkey
     assert call_kwargs["stream"] is True
     assert call_kwargs["store"] is False
     assert call_kwargs["generation_config"]["max_output_tokens"] == 1024
-    assert len(call_kwargs["input"].split("原文：", 1)[1]) == 4000
+    assert len(call_kwargs["input"].split("\nNote: ", 1)[1]) == 4000
     assert all(c["model"] == "gemini-3.5-flash-lite" for c in chunks)
     combined_json = json.loads("".join(c["delta"] for c in chunks))
     jsonschema.validate(instance=combined_json, schema=analysis_schema)
@@ -497,7 +497,7 @@ def test_token_cli_mint_verify_401_and_tenant_isolation(tmp_path, monkeypatch) -
             "/api/v1/analyze/stream",
             headers=bad_headers,
             json={
-                "content": "测试未授权拦截",
+                "content": "Unauthorized request should be rejected",
                 "nowIso": "2026-11-20T09:00:00",
                 "model": "gemini-3.5-flash-lite",
             },
@@ -507,8 +507,8 @@ def test_token_cli_mint_verify_401_and_tenant_isolation(tmp_path, monkeypatch) -
     # Different tenants sharing the same syncKey="engram-demo" remain strictly isolated
     sample_memory_1 = {
         "id": "mem_t1",
-        "content": "团队成员A的私有备忘",
-        "summary": "团队成员A的私有备忘",
+        "content": "Private note of team member A",
+        "summary": "Private note of team member A",
         "tags": [],
         "createdAtMillis": 1700000000000,
         "updatedAtMillis": 1700000001000,
@@ -571,12 +571,12 @@ def test_quota_cap_refund_on_failed_stream_and_monthly_hard_cap(tmp_path, monkey
     )
 
     payload = {
-        "content": "测试额度计数与失败退还",
+        "content": "Quota counting and refund test",
         "nowIso": "2026-11-20T09:00:00",
         "model": "gemini-3.5-flash-lite",
     }
 
-    # Failed stream establishment before first event refunds quota (仅成功建流计次)
+    # Failed stream establishment before first event refunds quota (only established streams are counted)
     sse_schema = _load_schema("analysis-sse.schema.json")
     chunk_validator = jsonschema.Draft202012Validator(
         {
@@ -761,3 +761,252 @@ def test_auth_status_probe_is_zero_cost_and_delete_is_tenant_isolated(tmp_path, 
         headers={"Authorization": f"Bearer {token_t1}"},
     )
     assert exhausted.status_code == 429
+
+
+# ---------------------------------------------------------------------------
+# POST /api/v1/answer/stream (grounded GraphRAG "Ask")
+# ---------------------------------------------------------------------------
+
+
+def _sse_validator(def_name: str) -> jsonschema.Draft202012Validator:
+    sse_schema = _load_schema("analysis-sse.schema.json")
+    return jsonschema.Draft202012Validator(
+        {
+            "$schema": sse_schema["$schema"],
+            "$defs": sse_schema["$defs"],
+            "$ref": f"#/$defs/{def_name}",
+        }
+    )
+
+
+def _collect_sse(resp) -> tuple[list[dict], bool]:
+    chunks: list[dict] = []
+    saw_done_marker = False
+    for line in resp.iter_lines():
+        if not line or not line.startswith("data:"):
+            continue
+        raw = line.removeprefix("data:").strip()
+        if raw == "[DONE]":
+            saw_done_marker = True
+            continue
+        chunks.append(json.loads(raw))
+    return chunks, saw_done_marker
+
+
+def _answer_request(**overrides) -> dict:
+    body = {
+        "question": "When is the contract review with Ms. Zhang?",
+        "nowIso": "2026-11-20T09:00:00+08:00",
+        "contexts": [
+            {
+                "id": "mem_1",
+                "text": "Tomorrow 15:00 in Software Park III B7, review the contract addendum with Ms. Zhang.",
+                "createdAtMillis": 1763600000000,
+            },
+            {
+                "id": "mem_2",
+                "text": "Contract is blocked on term alignment with legal.",
+                "createdAtMillis": 1763500000000,
+            },
+        ],
+        "model": "gemini-3.5-flash-lite",
+    }
+    body.update(overrides)
+    return body
+
+
+def test_answer_request_and_chunk_match_schema() -> None:
+    req_validator = _sse_validator("AnswerStreamRequest")
+    chunk_validator = _sse_validator("AnalysisStreamChunk")
+
+    req_validator.validate(_answer_request())
+    req_validator.validate(_answer_request(contexts=[]))
+    chunk_validator.validate({"delta": "On Nov 21 at 15:00 [1].", "done": False, "model": "m", "latencyMs": 3})
+
+    for bad in [
+        _answer_request(question=""),
+        _answer_request(question="q" * 501),
+        _answer_request(contexts=[_answer_request()["contexts"][0]] * 9),
+        _answer_request(contexts=[{"id": "x", "text": "t" * 1201, "createdAtMillis": 0}]),
+        _answer_request(contexts=[{"id": "x", "text": "t", "createdAtMillis": -1}]),
+        _answer_request(extra="nope"),
+    ]:
+        assert not req_validator.is_valid(bad)
+
+    no_model = _answer_request()
+    del no_model["model"]
+    assert not req_validator.is_valid(no_model)
+
+
+def test_answer_stream_requires_token_when_secret_set(tmp_path, monkeypatch) -> None:
+    secret = "test-answer-secret"
+    monkeypatch.setenv("ENGRAM_DB_PATH", str(tmp_path / "answer_auth.db"))
+    monkeypatch.setenv("ENGRAM_DEMO_SIGNING_SECRET", secret)
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "test-gcp-project")
+
+    def must_not_be_called(project: str, location: str):
+        raise AssertionError("Vertex client must not be created for unauthorized requests")
+
+    monkeypatch.setattr("app.main._create_vertex_client", must_not_be_called)
+
+    expired_token = mint_demo_token(
+        tenant_id="team01",
+        days=1,
+        secret=secret,
+        now_epoch=int(time.time()) - 10 * 86400,
+    )
+    for bad_headers in [{}, {"Authorization": f"Bearer {expired_token}"}, {"Authorization": "Bearer garbage"}]:
+        resp = client.post("/api/v1/answer/stream", headers=bad_headers, json=_answer_request())
+        assert resp.status_code == 401
+
+
+def test_answer_stream_vertex_streams_cited_text_and_builds_grounded_prompt(monkeypatch) -> None:
+    monkeypatch.delenv("ENGRAM_DEMO_SIGNING_SECRET", raising=False)
+    monkeypatch.delenv("GOOGLE_CLOUD_LOCATION", raising=False)
+    monkeypatch.delenv("ENGRAM_VERTEX_MODEL", raising=False)
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "test-gcp-project")
+
+    answer_parts = ["The review is tomorrow ", "(Nov 21) at 15:00 in Software Park III B7 [1]."]
+    captured_calls: list[dict] = []
+
+    async def fake_event_stream():
+        yield SimpleNamespace(event_type="interaction.created")
+        yield SimpleNamespace(
+            event_type="step.delta",
+            delta=SimpleNamespace(type="thought_summary", text="ignored thought"),
+        )
+        for part in answer_parts:
+            yield SimpleNamespace(event_type="step.delta", delta=SimpleNamespace(type="text", text=part))
+        yield SimpleNamespace(event_type="interaction.completed")
+
+    class FakeInteractions:
+        async def create(self, **kwargs):
+            captured_calls.append(kwargs)
+            return fake_event_stream()
+
+    monkeypatch.setattr(
+        "app.main._create_vertex_client",
+        lambda project, location: SimpleNamespace(aio=SimpleNamespace(interactions=FakeInteractions())),
+    )
+
+    chunk_validator = _sse_validator("AnalysisStreamChunk")
+    long_context = {"id": "mem_long", "text": "x" * 1200, "createdAtMillis": 1763400000000}
+    request_body = _answer_request(
+        contexts=_answer_request()["contexts"] + [long_context] * 6,
+        model="client-requested-ignored",
+    )
+    _sse_validator("AnswerStreamRequest").validate(request_body)
+
+    with client.stream("POST", "/api/v1/answer/stream", json=request_body) as resp:
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/event-stream")
+        chunks, saw_done_marker = _collect_sse(resp)
+
+    assert saw_done_marker
+    for chunk in chunks:
+        chunk_validator.validate(chunk)
+    assert len(chunks) == len(answer_parts) + 1
+    assert chunks[-1]["done"] is True and chunks[-1]["error"] is None
+    assert all(c["model"] == "gemini-3.5-flash-lite" for c in chunks)
+    answer = "".join(c["delta"] for c in chunks)
+    assert "[1]" in answer
+
+    assert len(captured_calls) == 1
+    call_kwargs = captured_calls[0]
+    assert call_kwargs["model"] == "gemini-3.5-flash-lite"
+    assert call_kwargs["stream"] is True
+    assert call_kwargs["store"] is False
+    assert call_kwargs["generation_config"]["max_output_tokens"] == 1024
+    assert "ONLY" in call_kwargs["system_instruction"]
+    assert "[1], [2]" in call_kwargs["system_instruction"]
+
+    prompt = call_kwargs["input"]
+    assert prompt.startswith("Current local time: 2026-11-20T09:00:00+08:00\n")
+    assert "[1] (2025-11-20) Tomorrow 15:00 in Software Park III B7" in prompt
+    assert "[2] (2025-11-19) Contract is blocked" in prompt
+    assert prompt.rstrip().endswith("Question: When is the contract review with Ms. Zhang?")
+    snippet_block = prompt.split("Memory snippets:\n", 1)[1].split("\n\nQuestion:", 1)[0]
+    snippet_text_chars = sum(len(line.split(") ", 1)[1]) for line in snippet_block.splitlines())
+    assert snippet_text_chars <= 6000
+    assert "[3] " in snippet_block
+
+
+def test_answer_stream_counts_quota_and_refunds_on_pre_stream_failure(tmp_path, monkeypatch) -> None:
+    secret = "test-answer-quota-secret"
+    monkeypatch.setenv("ENGRAM_DB_PATH", str(tmp_path / "answer_quota.db"))
+    monkeypatch.setenv("ENGRAM_DEMO_SIGNING_SECRET", secret)
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "test-gcp-project")
+    monkeypatch.setenv("ENGRAM_DEMO_MAX_REQUESTS_PER_TOKEN", "1")
+    monkeypatch.setenv("ENGRAM_MONTHLY_HARD_CAP_USD", "5.0")
+    monkeypatch.setenv("ENGRAM_ESTIMATED_COST_PER_REQ_USD", "0.0004")
+
+    token = mint_demo_token("tenant-ask", days=7, secret=secret)
+    headers = {"Authorization": f"Bearer {token}"}
+    should_fail = True
+
+    class FlakyOrOkInteractions:
+        async def create(self, **kwargs):
+            if should_fail:
+                raise RuntimeError("Vertex handshake failed")
+
+            async def ok_stream():
+                yield SimpleNamespace(event_type="step.delta", delta=SimpleNamespace(type="text", text="Yes [1]."))
+
+            return ok_stream()
+
+    monkeypatch.setattr(
+        "app.main._create_vertex_client",
+        lambda project, location: SimpleNamespace(aio=SimpleNamespace(interactions=FlakyOrOkInteractions())),
+    )
+    chunk_validator = _sse_validator("AnalysisStreamChunk")
+
+    # Pre-stream failure emits a schema-valid error frame and refunds the reserved slot
+    with client.stream("POST", "/api/v1/answer/stream", headers=headers, json=_answer_request()) as fail_resp:
+        assert fail_resp.status_code == 200
+        chunks, saw_done_marker = _collect_sse(fail_resp)
+    assert saw_done_marker
+    assert len(chunks) == 1
+    chunk_validator.validate(chunks[0])
+    assert chunks[0]["done"] is True
+    assert chunks[0]["error"] == "Upstream request failed"
+    assert client.get("/api/v1/auth/status", headers=headers).json()["remainingQuota"] == 1
+
+    # A successful stream consumes the only slot; the next request is rejected with 429
+    should_fail = False
+    with client.stream("POST", "/api/v1/answer/stream", headers=headers, json=_answer_request()) as ok_resp:
+        assert ok_resp.status_code == 200
+        chunks, _ = _collect_sse(ok_resp)
+    assert "".join(c["delta"] for c in chunks) == "Yes [1]."
+    assert client.post("/api/v1/answer/stream", headers=headers, json=_answer_request()).status_code == 429
+
+
+def test_answer_stream_returns_503_when_unconfigured(monkeypatch) -> None:
+    monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
+    monkeypatch.delenv("ENGRAM_DEMO_SIGNING_SECRET", raising=False)
+    monkeypatch.delenv("ENGRAM_CLOUD_API_KEY", raising=False)
+    resp = client.post("/api/v1/answer/stream", json=_answer_request())
+    assert resp.status_code == 503
+
+    monkeypatch.setenv("ENGRAM_CLOUD_API_KEY", "sk-test-only-key")
+    monkeypatch.delenv("ENGRAM_CLOUD_BASE_URL", raising=False)
+    resp = client.post("/api/v1/answer/stream", json=_answer_request())
+    assert resp.status_code == 503
+
+
+def test_answer_stream_rejects_invalid_requests(monkeypatch) -> None:
+    monkeypatch.delenv("ENGRAM_DEMO_SIGNING_SECRET", raising=False)
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "test-gcp-project")
+
+    def must_not_be_called(project: str, location: str):
+        raise AssertionError("Vertex client must not be created for invalid requests")
+
+    monkeypatch.setattr("app.main._create_vertex_client", must_not_be_called)
+
+    context = _answer_request()["contexts"][0]
+    for bad in [
+        _answer_request(question=""),
+        _answer_request(contexts=[context] * 9),
+        _answer_request(contexts=[{**context, "text": "t" * 1201}]),
+        _answer_request(extra="nope"),
+    ]:
+        assert client.post("/api/v1/answer/stream", json=bad).status_code == 422

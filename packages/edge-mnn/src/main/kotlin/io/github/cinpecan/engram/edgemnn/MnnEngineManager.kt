@@ -69,12 +69,12 @@ class MnnEngineManager(
             uiHiddenUnloadJob = null
             jniMutex.withLock {
                 if (!nativeBridge.hasRealMnnBackend()) {
-                    val msg = "未内置 MNN 原生推理库"
+                    val msg = "MNN native runtime is not bundled in this build"
                     _state.value = EngineState.Error(msg)
                     return@withLock Result.failure(IllegalStateException(msg))
                 }
                 if (modelDirPath.isBlank()) {
-                    val msg = "本地模型权重尚未下载"
+                    val msg = "Model weights have not been downloaded"
                     _state.value = EngineState.Error(msg)
                     return@withLock Result.failure(IllegalArgumentException(msg))
                 }
@@ -261,18 +261,18 @@ class MnnEngineManager(
     private fun ensureDefaultSessionLocked() {
         if (sessionHandle != 0L) return
         if (!nativeBridge.hasRealMnnBackend()) {
-            error("未内置 MNN 原生推理库")
+            error("MNN native runtime is not bundled in this build")
         }
         val id = loadedModelId ?: configuredModelId
         val dir = loadedModelDir.ifBlank { configuredModelDir }
         if (dir.isBlank()) {
-            error("端侧 MNN 模型尚未加载")
+            error("On-device MNN model is not loaded")
         }
         val beforeBytes = memoryProvider.residentMemoryBytes()
         _state.value = EngineState.Loading(id)
         val handle = nativeBridge.createSession(dir)
         if (handle == 0L) {
-            _state.value = EngineState.Error("MNN 模型会话初始化失败：$id")
+            _state.value = EngineState.Error("Failed to initialize MNN session: $id")
             error("Native createSession failed during lazy initialization")
         }
         val afterBytes = memoryProvider.residentMemoryBytes()

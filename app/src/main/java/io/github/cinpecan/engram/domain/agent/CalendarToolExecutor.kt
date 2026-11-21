@@ -37,7 +37,7 @@ object CalendarToolExecutor {
             proposal.location?.takeIf { it.isNotBlank() }?.let { loc ->
                 putExtra(CalendarContract.Events.EVENT_LOCATION, loc)
             }
-            putExtra(CalendarContract.Events.DESCRIPTION, "由印迹 Engram 提炼 · ${buildMarker(memoryId)}")
+            putExtra(CalendarContract.Events.DESCRIPTION, "Distilled by Engram · ${buildMarker(memoryId)}")
         }
     }
 

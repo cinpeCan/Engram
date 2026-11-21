@@ -4,6 +4,7 @@ import io.github.cinpecan.engram.data.remote.AnalysisStreamRequestDto
 import io.github.cinpecan.engram.data.remote.CloudGatewayHttpException
 import io.github.cinpecan.engram.data.remote.CloudSseClient
 import io.github.cinpecan.engram.domain.analyzer.MemoryAnalyzer
+import io.github.cinpecan.engram.domain.analyzer.PartialJsonSummaryExtractor
 import io.github.cinpecan.engram.domain.model.AnalysisSource
 import io.github.cinpecan.engram.domain.model.InferenceMode
 import io.github.cinpecan.engram.domain.model.MemoryAnalysisPayload
@@ -64,9 +65,7 @@ class UnifiedInferenceRouter(
                     nowMillis = nowMillis,
                     serverBaseUrl = serverBaseUrl,
                     authToken = authToken,
-                    onPreview = { partial ->
-                        emit(DistillationEvent.StreamingPreview(partial, "云端 SSE 流式提炼中…"))
-                    },
+                    onPreview = { preview -> emit(preview) },
                 )
             ) {
                 is CloudAttemptResult.Success -> {
@@ -85,9 +84,7 @@ class UnifiedInferenceRouter(
                 content = content,
                 nowMillis = nowMillis,
                 degradedFromCloud = degradedFromCloud,
-                onPreview = { partial, stage ->
-                    emit(DistillationEvent.StreamingPreview(partial, stage))
-                },
+                onPreview = { preview -> emit(preview) },
             )
             if (edgeCompleted != null) {
                 emit(edgeCompleted)
@@ -99,11 +96,11 @@ class UnifiedInferenceRouter(
         val fallbackBadge = when (val failure = cloudFailure) {
             null -> ""
             is CloudGatewayHttpException -> when (failure.statusCode) {
-                401 -> "需有效体验码 · 已用本地提炼"
-                429 -> "云端体验额度已满 · 已用本地提炼"
-                else -> "云端未连接 · 已用本地提炼"
+                401 -> BADGE_FALLBACK_UNAUTHORIZED
+                429 -> BADGE_FALLBACK_QUOTA
+                else -> BADGE_FALLBACK_OFFLINE
             }
-            else -> "云端未连接 · 已用本地提炼"
+            else -> BADGE_FALLBACK_OFFLINE
         }
         emit(
             DistillationEvent.Completed(
@@ -119,31 +116,34 @@ class UnifiedInferenceRouter(
         nowMillis: Long,
         serverBaseUrl: String,
         authToken: String?,
-        onPreview: suspend (String) -> Unit,
+        onPreview: suspend (DistillationEvent.StreamingPreview) -> Unit,
     ): CloudAttemptResult = try {
+        val nowIso = LocalDateTime.ofInstant(Instant.ofEpochMilli(nowMillis), zoneId)
+            .format(DateTimeFormatter.ISO_LOCAL_DATE_TIME)
+        val request = AnalysisStreamRequestDto(
+            content = content,
+            nowIso = nowIso,
+        )
         val startNs = System.nanoTime()
         var firstTokenMs = -1L
         var lastLatencyMs = 1L
         val builder = StringBuilder()
         var chunkCount = 0
-
-        val nowIso = LocalDateTime.ofInstant(Instant.ofEpochMilli(nowMillis), zoneId)
-            .format(DateTimeFormatter.ISO_LOCAL_DATE_TIME)
-
-        val request = AnalysisStreamRequestDto(
-            content = content,
-            nowIso = nowIso,
-        )
+        var modelId = request.model
+        val previewer = SummaryPreviewTracker(STAGE_CLOUD_STREAMING)
 
         cloudSseClient.streamAnalyze(serverBaseUrl, request, authToken = authToken).collect { chunk ->
             lastLatencyMs = chunk.latencyMs.coerceAtLeast(1L)
+            if (chunk.model.isNotBlank()) {
+                modelId = chunk.model
+            }
             if (chunk.delta.isNotEmpty()) {
                 if (firstTokenMs < 0L) {
                     firstTokenMs = ((System.nanoTime() - startNs) / 1_000_000L).coerceAtLeast(1L)
                 }
                 chunkCount++
                 builder.append(chunk.delta)
-                onPreview(builder.toString())
+                previewer.next(builder)?.let { onPreview(it) }
             }
         }
 
@@ -157,7 +157,8 @@ class UnifiedInferenceRouter(
         val ttft = if (firstTokenMs >= 0L) firstTokenMs else totalMs
         val badge = String.format(
             Locale.US,
-            "Cloud SSE · TTFT %dms · %.1f tok/s",
+            "%s · TTFT %dms · %.1f tok/s",
+            humanizeModelName(modelId),
             ttft,
             tokPerSec,
         )
@@ -179,14 +180,10 @@ class UnifiedInferenceRouter(
         content: String,
         nowMillis: Long,
         degradedFromCloud: Boolean,
-        onPreview: suspend (String, String) -> Unit,
+        onPreview: suspend (DistillationEvent.StreamingPreview) -> Unit,
     ): DistillationEvent.Completed? = try {
         val prompt = analyzer.buildAnalysisPrompt(content, nowMillis)
-        val stageLabel = if (degradedFromCloud) {
-            "云端降级 · 端侧 MNN 推理中…"
-        } else {
-            "端侧 MNN 流式提炼中…"
-        }
+        val previewer = SummaryPreviewTracker(STAGE_EDGE_STREAMING)
 
         val builder = StringBuilder()
         var finalText = ""
@@ -196,7 +193,7 @@ class UnifiedInferenceRouter(
             when (chunk) {
                 is StreamChunk.Delta -> {
                     builder.append(chunk.text)
-                    onPreview(builder.toString(), stageLabel)
+                    previewer.next(builder)?.let { onPreview(it) }
                 }
                 is StreamChunk.Completed -> {
                     finalText = chunk.fullText.ifEmpty { builder.toString() }
@@ -208,14 +205,25 @@ class UnifiedInferenceRouter(
         val telemetry = finalTelemetry?.takeIf { it.isRealMnn } ?: return null
         val merged = analyzer.mergeModelJsonOrNull(finalText, content, nowMillis) ?: return null
 
-        val prefix = if (degradedFromCloud) "云端降级 · MNN" else "MNN 0.5B"
-        val badge = String.format(
-            Locale.US,
-            "%s · TTFT %dms · %.1f tok/s",
-            prefix,
-            telemetry.ttftMs,
-            telemetry.tokensPerSec,
-        )
+        val modelLabel = humanizeEdgeModelName(telemetry.modelId)
+        val badge = if (degradedFromCloud) {
+            String.format(
+                Locale.US,
+                "%s · %s · TTFT %dms · %.1f tok/s",
+                BADGE_CLOUD_FALLBACK_PREFIX,
+                modelLabel,
+                telemetry.ttftMs,
+                telemetry.tokensPerSec,
+            )
+        } else {
+            String.format(
+                Locale.US,
+                "%s · MNN · TTFT %dms · %.1f tok/s",
+                modelLabel,
+                telemetry.ttftMs,
+                telemetry.tokensPerSec,
+            )
+        }
 
         DistillationEvent.Completed(
             payload = merged,
@@ -226,5 +234,58 @@ class UnifiedInferenceRouter(
         throw e
     } catch (_: Throwable) {
         null
+    }
+
+    /**
+     * Converts the raw JSON stream into a summary-only typewriter preview, emitting only
+     * when the visible text or stage changes. Never leaks raw JSON into the UI.
+     */
+    private class SummaryPreviewTracker(private val streamingStage: String) {
+        private var lastText: String? = null
+        private var lastStage: String? = null
+
+        fun next(rawSoFar: CharSequence): DistillationEvent.StreamingPreview? {
+            val partial = PartialJsonSummaryExtractor.extract(rawSoFar.toString())
+            val text = partial?.text.orEmpty()
+            val stage = if (partial?.isClosed == true) STAGE_MAPPING_RELATIONS else streamingStage
+            if (text == lastText && stage == lastStage) return null
+            lastText = text
+            lastStage = stage
+            return DistillationEvent.StreamingPreview(partialText = text, stageLabel = stage)
+        }
+    }
+
+    companion object {
+        const val STAGE_PREPARING = "Preparing…"
+        const val STAGE_CLOUD_STREAMING = "Streaming from cloud…"
+        const val STAGE_EDGE_STREAMING = "Distilling on-device…"
+        const val STAGE_MAPPING_RELATIONS = "Mapping relations…"
+
+        const val BADGE_FALLBACK_UNAUTHORIZED = "Access token required · Local extraction"
+        const val BADGE_FALLBACK_QUOTA = "Cloud quota reached · Local extraction"
+        const val BADGE_FALLBACK_OFFLINE = "Cloud offline · Local extraction"
+        const val BADGE_CLOUD_FALLBACK_PREFIX = "Cloud fallback"
+
+        /** Maps a gateway model id to a readable label, e.g. `gemini-3.5-flash-lite` -> `Gemini 3.5 Flash-Lite`. */
+        fun humanizeModelName(modelId: String): String {
+            val trimmed = modelId.trim()
+            if (!trimmed.startsWith("gemini-", ignoreCase = true)) return trimmed.ifEmpty { "Cloud" }
+            return trimmed.lowercase(Locale.US)
+                .split('-')
+                .filter { it.isNotEmpty() }
+                .joinToString(" ") { part -> part.replaceFirstChar { it.titlecase(Locale.US) } }
+                .replace("Flash Lite", "Flash-Lite")
+        }
+
+        /** Maps an on-device model id to a readable label, e.g. `qwen2.5-0.5b-instruct-mnn` -> `Qwen2.5 0.5B`. */
+        fun humanizeEdgeModelName(modelId: String): String {
+            val lower = modelId.lowercase(Locale.US)
+            return when {
+                lower.contains("qwen2.5-0.5b") -> "Qwen2.5 0.5B"
+                lower.contains("qwen2.5-1.5b") -> "Qwen2.5 1.5B"
+                modelId.isBlank() -> "On-device model"
+                else -> modelId
+            }
+        }
     }
 }

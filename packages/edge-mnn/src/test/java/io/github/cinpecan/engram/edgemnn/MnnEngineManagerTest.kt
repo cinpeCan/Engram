@@ -53,8 +53,8 @@ class MnnEngineManagerTest {
             maxObservedConcurrency.updateAndGet { prev -> maxOf(prev, current) }
             try {
                 Thread.sleep(10)
-                callback.onToken("测试")
-                callback.onToken("输出")
+                callback.onToken("test ")
+                callback.onToken("output")
                 callback.onComplete(ttftMs = 12L, totalMs = 24L, generatedTokens = 2)
             } finally {
                 activeConcurrency.decrementAndGet()
@@ -118,7 +118,7 @@ class MnnEngineManagerTest {
 
         val chunks = manager.streamGenerate("hello").toList()
         val completed = chunks.filterIsInstance<StreamChunk.Completed>().single()
-        assertEquals("测试输出", completed.fullText)
+        assertEquals("test output", completed.fullText)
         assertEquals(12L, completed.telemetry.ttftMs)
         assertTrue(completed.telemetry.isRealMnn)
 
@@ -196,7 +196,7 @@ class MnnEngineManagerTest {
 
         val chunks = manager.streamGenerate("hi").toList()
         val completed = chunks.filterIsInstance<StreamChunk.Completed>().single()
-        assertEquals("测试输出", completed.fullText)
+        assertEquals("test output", completed.fullText)
         assertEquals(listOf("/tmp/models/qwen", "/tmp/models/qwen"), bridge.createdModelDirs)
         assertEquals("qwen-0.5b", completed.telemetry.modelId)
     }

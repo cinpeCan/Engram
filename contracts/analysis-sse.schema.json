@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/cinpeCan/Engram/contracts/analysis-sse.schema.json",
   "title": "AnalysisStreamContracts",
-  "description": "Cloud structured memory analysis SSE request and delta frame contracts shared between Engram Android and FastAPI gateway.",
+  "description": "Cloud SSE contracts shared between Engram Android and the FastAPI gateway: structured memory analysis (POST /api/v1/analyze/stream) and grounded memory answers (POST /api/v1/answer/stream). Both endpoints emit AnalysisStreamChunk frames as `data: <json>` lines, terminated by a final `data: [DONE]` line.",
   "$defs": {
     "AnalysisStreamRequest": {
       "type": "object",
@@ -11,7 +11,44 @@
       "properties": {
         "content": { "type": "string", "minLength": 1 },
         "nowIso": { "type": "string", "minLength": 10 },
-        "model": { "type": "string", "minLength": 1 }
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "default": "gemini-3.5-flash-lite",
+          "description": "Requested model. Ignored in Vertex AI mode, where the gateway uses ENGRAM_VERTEX_MODEL."
+        }
+      }
+    },
+    "AnswerContext": {
+      "type": "object",
+      "description": "One retrieved memory snippet; its 1-based position in `contexts` is the citation number [n].",
+      "required": ["id", "text", "createdAtMillis"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "text": { "type": "string", "minLength": 1, "maxLength": 1200 },
+        "createdAtMillis": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "AnswerStreamRequest": {
+      "type": "object",
+      "description": "Question answered strictly from on-device retrieved memory snippets; the streamed answer is plain text with inline [n] citations.",
+      "required": ["question", "nowIso", "contexts", "model"],
+      "additionalProperties": false,
+      "properties": {
+        "question": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "nowIso": { "type": "string", "minLength": 10 },
+        "contexts": {
+          "type": "array",
+          "maxItems": 8,
+          "items": { "$ref": "#/$defs/AnswerContext" }
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "default": "gemini-3.5-flash-lite",
+          "description": "Requested model. Ignored in Vertex AI mode, where the gateway uses ENGRAM_VERTEX_MODEL."
+        }
       }
     },
     "AnalysisStreamChunk": {

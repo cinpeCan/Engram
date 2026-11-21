@@ -128,7 +128,7 @@ fun EngramWorkspace(
             },
             topBar = {
                 TopAppBar(
-                    title = { Text("Engram · 印迹") },
+                    title = { Text("Engram") },
                     colors = TopAppBarDefaults.topAppBarColors(
                         containerColor = Color.Transparent,
                         scrolledContainerColor = MaterialTheme.colorScheme.background.copy(alpha = 0.88f),
@@ -201,20 +201,20 @@ private fun EngineStatusPill(
     )
 
     val text = when {
-        engineState is EngineState.Loading -> "加载模型中…"
-        engineState is EngineState.Generating -> "端侧推理中…"
-        engineState is EngineState.Releasing -> "释放内存中…"
+        engineState is EngineState.Loading -> "Loading model…"
+        engineState is EngineState.Generating -> "Running on-device…"
+        engineState is EngineState.Releasing -> "Freeing memory…"
         inferenceMode == InferenceMode.CLOUD_COLLAB -> when (cloudSessionState) {
-            is CloudSessionState.Ready -> "云端就绪"
-            CloudSessionState.Verifying -> "云端校验中…"
+            is CloudSessionState.Ready -> "Cloud ready"
+            CloudSessionState.Verifying -> "Verifying…"
             CloudSessionState.IdleUnconfigured,
             CloudSessionState.InvalidToken,
             CloudSessionState.QuotaExhausted,
             CloudSessionState.Unreachable,
-            -> "云端离线"
+            -> "Cloud offline"
         }
-        engineState is EngineState.Ready -> "Qwen 0.5B · 就绪"
-        else -> "端侧离线"
+        engineState is EngineState.Ready -> "Qwen 0.5B · Ready"
+        else -> "On-device"
     }
 
     ExpressivePillSurface(
@@ -224,7 +224,7 @@ private fun EngineStatusPill(
         pressedCorner = 10.dp,
         containerColor = MaterialTheme.colorScheme.surfaceVariant,
         contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-        contentDescription = "推理与同步：$text",
+        contentDescription = "Inference & Sync: $text",
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
