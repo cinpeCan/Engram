@@ -474,7 +474,7 @@ internal fun computeAutoGraphScale(
 }
 
 @Composable
-private fun EntityCapsuleNode(
+internal fun EntityCapsuleNode(
     node: GraphNodeUi,
     isSelected: Boolean,
     onClick: () -> Unit,

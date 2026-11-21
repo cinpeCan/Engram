@@ -4,6 +4,8 @@ import androidx.room.ColumnInfo
 import androidx.room.Embedded
 import androidx.room.Entity
 import androidx.room.ForeignKey
+import androidx.room.Fts4
+import androidx.room.FtsOptions
 import androidx.room.Index
 import androidx.room.PrimaryKey
 import androidx.room.Relation
@@ -78,4 +80,15 @@ data class DeletedMemoryEntity(
     val id: String,
     @ColumnInfo(name = "deleted_at")
     val deletedAtMillis: Long,
+)
+
+/**
+ * External-content FTS4 index over [MemoryEntity] using SQLite's `porter` stemmer, kept in sync
+ * by Room-generated triggers. Powers the lexical channel of on-device GraphRAG ("Ask").
+ */
+@Fts4(contentEntity = MemoryEntity::class, tokenizer = FtsOptions.TOKENIZER_PORTER)
+@Entity(tableName = "memories_fts")
+data class MemoryFtsEntity(
+    val content: String,
+    val summary: String,
 )

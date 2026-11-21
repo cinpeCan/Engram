@@ -6,6 +6,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
@@ -106,6 +107,7 @@ import io.github.cinpecan.engram.ui.navigation.LocalWorkspaceContentPadding
 import io.github.cinpecan.engram.ui.viewmodel.CaptureEffect
 import io.github.cinpecan.engram.ui.viewmodel.CaptureIntent
 import io.github.cinpecan.engram.ui.viewmodel.CaptureViewModel
+import io.github.cinpecan.engram.ui.viewmodel.isAskQuery
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -195,6 +197,7 @@ fun CaptureRoute(
                     actionLabel = "Undo",
                     onAction = { viewModel.onIntent(CaptureIntent.UndoDeleteMemory) },
                 )
+                is CaptureEffect.OpenAnswer -> navigator.openAnswer(effect.question)
             }
         }
     }
@@ -430,6 +433,7 @@ private fun UnifiedCaptureComposer(
     )
 
     val canSubmit = inputText.isNotBlank() && !isSubmitting
+    val isAsk = isAskQuery(inputText)
     val hasInput = inputText.isNotEmpty()
 
     BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
@@ -495,7 +499,7 @@ private fun UnifiedCaptureComposer(
                         Box(contentAlignment = Alignment.CenterStart) {
                             if (inputText.isEmpty()) {
                                 Text(
-                                    text = "Capture a thought…",
+                                    text = "Capture a thought, or ask with ?",
                                     style = MaterialTheme.typography.bodyLarge,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
                                     maxLines = 1,
@@ -534,24 +538,30 @@ private fun UnifiedCaptureComposer(
                         modifier = Modifier.size(36.dp),
                         restCorner = 18.dp,
                         pressedCorner = 11.dp,
-                        containerColor = if (canSubmit) {
-                            MaterialTheme.colorScheme.primary
-                        } else {
-                            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f)
+                        containerColor = when {
+                            !canSubmit -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f)
+                            isAsk -> MaterialTheme.colorScheme.tertiary
+                            else -> MaterialTheme.colorScheme.primary
                         },
                         pressedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.85f),
-                        contentColor = if (canSubmit) {
-                            MaterialTheme.colorScheme.onPrimary
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
+                        contentColor = when {
+                            !canSubmit -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
+                            isAsk -> MaterialTheme.colorScheme.onTertiary
+                            else -> MaterialTheme.colorScheme.onPrimary
                         },
-                        contentDescription = "Save memory",
+                        contentDescription = if (isAsk) "Ask your memories" else "Save memory",
                     ) {
-                        Icon(
-                            imageVector = Icons.Rounded.ArrowUpward,
-                            contentDescription = null,
-                            modifier = Modifier.size(20.dp),
-                        )
+                        Crossfade(
+                            targetState = isAsk,
+                            animationSpec = spring(dampingRatio = 1.0f, stiffness = 900f),
+                            label = "submitIconMorph",
+                        ) { asking ->
+                            Icon(
+                                imageVector = if (asking) Icons.Rounded.AutoAwesome else Icons.Rounded.ArrowUpward,
+                                contentDescription = null,
+                                modifier = Modifier.size(if (asking) 18.dp else 20.dp),
+                            )
+                        }
                     }
                 }
             }

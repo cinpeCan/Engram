@@ -39,6 +39,9 @@ sealed interface EngramNavKey : NavKey {
 
     @Serializable
     data object EngineSheet : Overlay
+
+    @Serializable
+    data class AnswerSheet(val question: String) : Overlay
 }
 
 @Stable
@@ -74,6 +77,10 @@ class EngramNavigator(
 
     fun openRawMemory(memoryId: String) {
         openOverlay(EngramNavKey.RawMemorySheet(memoryId = memoryId))
+    }
+
+    fun openAnswer(question: String) {
+        openOverlay(EngramNavKey.AnswerSheet(question = question))
     }
 
     fun openOverlay(overlay: EngramNavKey.Overlay) {

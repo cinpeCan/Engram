@@ -43,6 +43,15 @@ sealed interface CaptureEffect {
     data class OpenCalendarEvent(val eventId: Long, val proposal: CalendarProposal) : CaptureEffect
     data class ShowMessage(val message: String) : CaptureEffect
     data class ShowUndoDelete(val message: String) : CaptureEffect
+    data class OpenAnswer(val question: String) : CaptureEffect
+}
+
+/** A trailing question mark (ASCII or full-width) turns the composer into "Ask your memories". */
+fun isAskQuery(text: String): Boolean {
+    val trimmed = text.trimEnd()
+    if (trimmed.length < 2) return false
+    val last = trimmed.last()
+    return last == '?' || last == '\uFF1F'
 }
 
 class CaptureViewModel(
@@ -120,6 +129,11 @@ class CaptureViewModel(
     private fun submitCapture() {
         val raw = _inputText.value.trim()
         if (raw.isEmpty() || _isSubmitting.value) return
+        if (isAskQuery(raw)) {
+            _inputText.value = ""
+            effectChannel.trySend(CaptureEffect.OpenAnswer(raw))
+            return
+        }
         viewModelScope.launch {
             _isSubmitting.value = true
             try {

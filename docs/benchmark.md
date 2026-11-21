@@ -5,8 +5,8 @@
 | Check Suite | Scope | Command |
 | :--- | :--- | :--- |
 | `:packages:edge-mnn` C++/JNI & JVM Tests | `TokenStreamCoalescer` 32ms windowing, `MnnEngineManager` strict validation (rejects missing backend/blank dir), JNI thread serialization & `onTrimMemory` state machine, `arm64-v8a` 16KB-aligned CMake compilation | `./gradlew :packages:edge-mnn:testDebugUnitTest :packages:edge-mnn:assembleDebug` |
-| `:app` Unit Tests & Debug APK | `MemoryAnalyzer` JSON extraction & Deponder invariants, `DefaultCloudEndpointProvider` AES-GCM decryption, `CloudSessionMonitor` debounced Bearer verification, `SystemCalendarObserver` matching, `UnifiedInferenceRouter`, `MemoryRepository` tombstone sync, `EngramNavigator`, `CaptureViewModel`, `GraphViewModel`, `EngineViewModel`, Compose + Nav3 APK packaging | `./gradlew testDebugUnitTest assembleDebug` |
-| `server/` FastAPI Contract Tests | `/health`, `/healthz`, `/api/v1/auth/status`, `/api/v1/memories/sync`, `/api/v1/memories/delete`, `/api/v1/analyze/stream` (Vertex AI Gemini & OpenAI-compatible SSE, HTTP 401/429/503, HMAC token CLI, tenant isolation & quota refund) against `contracts/*.schema.json` | `server/.venv/bin/pytest server/tests` |
+| `:app` Unit Tests & Debug APK | `MemoryAnalyzer` JSON extraction & Deponder invariants, `PartialJsonSummaryExtractor` typewriter streaming, `GraphRagRetriever` (FTS + 2-hop graph + RRF on the seed storyline), `QueryTokenizer` MATCH sanitization, `AnswerRepository` cloud → MNN → retrieval-only fallback, Robolectric `EngramDatabaseMigrationTest` (Room v4 → v5 FTS4 porter, no data loss), `DefaultCloudEndpointProvider` AES-GCM decryption, `CloudSessionMonitor` debounced Bearer verification, `SystemCalendarObserver` matching, `UnifiedInferenceRouter`, `MemoryRepository` tombstone sync, ViewModels, Compose + Nav3 APK packaging | `./gradlew testDebugUnitTest assembleDebug` |
+| `server/` FastAPI Contract Tests | `/health`, `/healthz`, `/api/v1/auth/status`, `/api/v1/memories/sync`, `/api/v1/memories/delete`, `/api/v1/analyze/stream`, `/api/v1/answer/stream` (Vertex AI Gemini & OpenAI-compatible SSE, HTTP 401/422/429/503, HMAC token CLI, tenant isolation & quota refund) against `contracts/*.schema.json` | `server/.venv/bin/pytest server/tests` |
 
 ---
 
@@ -35,7 +35,7 @@ Measured on a release build after running `./scripts/build_mnn_android.sh` and d
 > Cold load time, peak process RSS, and post-unload RSS are not yet recorded; follow the steps below to extend the matrix.
 
 ### Reproduction Steps
-1. Toggle **Airplane Mode** on the test device and select **端侧离线** in `EngineBottomSheet`.
-2. Download `Qwen2.5-0.5B Instruct · INT4` and tap **加载模型** -> confirm `EngineStatusPill` turns green and record RSS increase (`modelFootprintBytes`).
+1. Toggle **Airplane Mode** on the test device and select **On-device** in `EngineBottomSheet`.
+2. Download `Qwen2.5-0.5B Instruct · INT4` and tap **Load model** -> confirm `EngineStatusPill` turns green and record RSS increase (`modelFootprintBytes`).
 3. Submit 3 notes in `CaptureScreen` and observe live 32ms-coalesced streaming inside each `PENDING` card; record `TTFT` and `tok/s` from each settled card's telemetry badge.
-4. Tap **「释放内存」** (or background the app beyond `15s` / trigger `adb shell am send-trim-memory io.github.cinpecan.engram RUNNING_CRITICAL`) and record reclaimed RSS.
+4. Tap **Free memory** (or background the app beyond `15s` / trigger `adb shell am send-trim-memory io.github.cinpecan.engram RUNNING_CRITICAL`) and record reclaimed RSS.

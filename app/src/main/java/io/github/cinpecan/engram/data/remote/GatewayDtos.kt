@@ -36,6 +36,23 @@ data class AnalysisStreamRequestDto(
     val model: String = "gemini-3.5-flash-lite",
 )
 
+/** 1:1 with `contracts/analysis-sse.schema.json#/$defs/AnswerContext`. */
+@Serializable
+data class AnswerContextDto(
+    val id: String,
+    val text: String,
+    val createdAtMillis: Long,
+)
+
+/** 1:1 with `contracts/analysis-sse.schema.json#/$defs/AnswerStreamRequest`. */
+@Serializable
+data class AnswerStreamRequestDto(
+    val question: String,
+    val nowIso: String,
+    val contexts: List<AnswerContextDto>,
+    val model: String = "gemini-3.5-flash-lite",
+)
+
 @Serializable
 data class AnalysisStreamChunkDto(
     val delta: String,

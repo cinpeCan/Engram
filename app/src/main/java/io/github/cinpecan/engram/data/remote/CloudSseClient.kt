@@ -20,26 +20,40 @@ class CloudSseClient(
         encodeDefaults = true
     },
 ) {
+    /** Streams structured memory distillation from `POST /api/v1/analyze/stream`. */
     fun streamAnalyze(
         baseUrl: String,
         requestPayload: AnalysisStreamRequestDto,
         authToken: String? = null,
+    ): Flow<AnalysisStreamChunkDto> =
+        streamChunks(baseUrl, ANALYZE_PATH, json.encodeToString(requestPayload), authToken)
+
+    /** Streams a cited GraphRAG answer from `POST /api/v1/answer/stream`. */
+    fun streamAnswer(
+        baseUrl: String,
+        requestPayload: AnswerStreamRequestDto,
+        authToken: String? = null,
+    ): Flow<AnalysisStreamChunkDto> =
+        streamChunks(baseUrl, ANSWER_PATH, json.encodeToString(requestPayload), authToken)
+
+    private fun streamChunks(
+        baseUrl: String,
+        path: String,
+        bodyJson: String,
+        authToken: String?,
     ): Flow<AnalysisStreamChunkDto> = flow {
         val effectiveBaseUrl = DefaultCloudEndpointProvider.resolveEffectiveBaseUrl(baseUrl)
-        val url = "$effectiveBaseUrl/api/v1/analyze/stream"
-        val body = json.encodeToString(requestPayload)
-            .toRequestBody("application/json; charset=utf-8".toMediaType())
+        val body = bodyJson.toRequestBody("application/json; charset=utf-8".toMediaType())
 
         val requestBuilder = Request.Builder()
-            .url(url)
+            .url("$effectiveBaseUrl$path")
             .header("Accept", "text/event-stream")
             .post(body)
         DefaultCloudEndpointProvider.resolveBearerTokenOrNull(authToken)?.let { token ->
             requestBuilder.header("Authorization", "Bearer $token")
         }
-        val request = requestBuilder.build()
 
-        okHttpClient.newCall(request).execute().use { response ->
+        okHttpClient.newCall(requestBuilder.build()).execute().use { response ->
             if (!response.isSuccessful) {
                 throw CloudGatewayHttpException(response.code)
             }
@@ -70,4 +84,9 @@ class CloudSseClient(
             }
         }
     }.flowOn(Dispatchers.IO)
+
+    private companion object {
+        const val ANALYZE_PATH = "/api/v1/analyze/stream"
+        const val ANSWER_PATH = "/api/v1/answer/stream"
+    }
 }

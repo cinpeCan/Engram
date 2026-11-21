@@ -10,18 +10,21 @@ import io.github.cinpecan.engram.data.remote.CloudAuthClient
 import io.github.cinpecan.engram.data.remote.CloudSseClient
 import io.github.cinpecan.engram.data.remote.MemorySyncClient
 import io.github.cinpecan.engram.data.remote.ModelDownloadManager
+import io.github.cinpecan.engram.data.repository.AnswerRepository
 import io.github.cinpecan.engram.data.repository.CloudSessionMonitor
 import io.github.cinpecan.engram.data.repository.MemoryRepository
 import io.github.cinpecan.engram.data.repository.UnifiedInferenceRouter
 import io.github.cinpecan.engram.domain.analyzer.MemoryAnalyzer
 import io.github.cinpecan.engram.edgemnn.EdgeAiEngine
 import io.github.cinpecan.engram.edgemnn.MnnEngineManager
+import io.github.cinpecan.engram.ui.answer.AnswerSheetRoute
 import io.github.cinpecan.engram.ui.capture.CaptureRoute
 import io.github.cinpecan.engram.ui.capture.RawMemoryRoute
 import io.github.cinpecan.engram.ui.engine.EngineBottomSheetRoute
 import io.github.cinpecan.engram.ui.graph.GraphRoute
 import io.github.cinpecan.engram.ui.navigation.BottomSheetSceneStrategy
 import io.github.cinpecan.engram.ui.navigation.EngramNavKey
+import io.github.cinpecan.engram.ui.viewmodel.AnswerViewModel
 import io.github.cinpecan.engram.ui.viewmodel.CaptureViewModel
 import io.github.cinpecan.engram.ui.viewmodel.EngineViewModel
 import io.github.cinpecan.engram.ui.viewmodel.GraphViewModel
@@ -94,6 +97,14 @@ val dataModule = module {
             json = get(),
         )
     }
+    single {
+        AnswerRepository(
+            store = get(),
+            edgeEngine = get(),
+            cloudSseClient = get(),
+            preferencesRepository = get(),
+        )
+    }
 }
 
 @OptIn(KoinExperimentalAPI::class)
@@ -120,6 +131,12 @@ val uiModule = module {
             memoryRepository = get(),
         )
     }
+    viewModel { (question: String) ->
+        AnswerViewModel(
+            question = question,
+            answerRepository = get(),
+        )
+    }
 
     navigation<EngramNavKey.Capture> {
         CaptureRoute()
@@ -141,5 +158,11 @@ val uiModule = module {
         metadata = BottomSheetSceneStrategy.bottomSheet(expandable = false),
     ) {
         EngineBottomSheetRoute()
+    }
+
+    navigation<EngramNavKey.AnswerSheet>(
+        metadata = BottomSheetSceneStrategy.bottomSheet(expandable = true),
+    ) { route ->
+        AnswerSheetRoute(question = route.question)
     }
 }

@@ -92,4 +92,16 @@ interface MemoryDao {
 
     @Query("SELECT * FROM deleted_memories")
     suspend fun getAllDeletedTombstones(): List<DeletedMemoryEntity>
+
+    /** FTS4 (`porter`) lexical candidates; [matchExpression] must come from QueryTokenizer. */
+    @Query(
+        """
+        SELECT m.id FROM memories m
+        JOIN memories_fts ON m.rowid = memories_fts.docid
+        WHERE memories_fts MATCH :matchExpression
+        ORDER BY m.created_at DESC
+        LIMIT :limit
+        """,
+    )
+    suspend fun searchMemoryIds(matchExpression: String, limit: Int): List<String>
 }

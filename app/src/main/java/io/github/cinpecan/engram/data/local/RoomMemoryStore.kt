@@ -7,6 +7,7 @@ import io.github.cinpecan.engram.domain.model.MemoryAnalysisPayload
 import io.github.cinpecan.engram.domain.model.MemoryAnalysisStatus
 import io.github.cinpecan.engram.domain.model.MemoryItem
 import io.github.cinpecan.engram.domain.model.RelationTriple
+import io.github.cinpecan.engram.domain.rag.QueryTokenizer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -163,6 +164,13 @@ class RoomMemoryStore(
 
     override suspend fun countMemories(): Int = withContext(Dispatchers.IO) {
         dao.countMemories()
+    }
+
+    override suspend fun searchLexicalIds(question: String, limit: Int): List<String> {
+        val match = QueryTokenizer.buildFtsMatchExpression(question) ?: return emptyList()
+        return withContext(Dispatchers.IO) {
+            runCatching { dao.searchMemoryIds(match, limit) }.getOrDefault(emptyList())
+        }
     }
 
     private suspend fun replaceRelations(

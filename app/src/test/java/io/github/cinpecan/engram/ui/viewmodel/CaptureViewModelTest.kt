@@ -169,6 +169,30 @@ class CaptureViewModelTest {
     }
 
     @Test
+    fun trailingQuestionMarkAsksInsteadOfSavingAMemory() = runTest {
+        val store = FakeStore()
+        val repo = MemoryRepository(
+            store = store,
+            inferenceRouter = buildRouter(),
+            backgroundScope = backgroundScope,
+        )
+        val vm = CaptureViewModel(repo)
+
+        assertTrue(isAskQuery("Why is the deposit on hold?"))
+        assertTrue(isAskQuery("Why is the deposit on hold\uFF1F  "))
+        assertFalse(isAskQuery("?"))
+        assertFalse(isAskQuery("Ship the module tomorrow"))
+
+        vm.onIntent(CaptureIntent.UpdateInput("  Why is the deposit on hold?  "))
+        vm.onIntent(CaptureIntent.SubmitCapture)
+
+        val effect = withTimeout(5_000L) { vm.effects.first() }
+        assertEquals(CaptureEffect.OpenAnswer("Why is the deposit on hold?"), effect)
+        assertEquals("", vm.inputText.value)
+        assertTrue("questions must never be persisted", store.getAllMemories().isEmpty())
+    }
+
+    @Test
     fun submitCapturePersistsMemoryClearsInputAndCleansStreamingPreview() = runTest {
         val store = FakeStore()
         val repo = MemoryRepository(

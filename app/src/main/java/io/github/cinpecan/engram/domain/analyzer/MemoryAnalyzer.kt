@@ -78,7 +78,7 @@ class MemoryAnalyzer(
         val rawSegments = SENTENCE_SPLIT_REGEX.split(rawSummary.replace("\r\n", "\n"))
             .map { segment ->
                 BULLET_PREFIX_REGEX.replace(segment.trim(), "")
-                    .trim(' ', '\t', ',', '，', '、', '•', '·')
+                    .trim(' ', '\t', ',', '\uFF0C', '\u3001', '•', '·')
                     .trimEnd('.')
                     .trim()
             }
@@ -86,8 +86,8 @@ class MemoryAnalyzer(
 
         val concisePoints = ArrayList<String>(4)
         for (segment in rawSegments) {
-            if (segment.length > MAX_BULLET_CHARS && (segment.contains(", ") || segment.contains('，'))) {
-                val subClauses = segment.split(", ", "，")
+            if (segment.length > MAX_BULLET_CHARS && (segment.contains(", ") || segment.contains('\uFF0C'))) {
+                val subClauses = segment.split(", ", "\uFF0C")
                     .map { it.trim() }
                     .filter { it.isNotBlank() }
                 var carry = ""
@@ -521,7 +521,7 @@ class MemoryAnalyzer(
         private val BIDIRECTIONAL_LABELS = setOf("aligns with", "works with", "meets")
 
         /** Splits on newlines, semicolons, CJK sentence marks, and `.!?` followed by whitespace or end. */
-        private val SENTENCE_SPLIT_REGEX = Regex("""\n+|[;；。！？]+|(?<=[.!?])(?=\s|$)""")
+        private val SENTENCE_SPLIT_REGEX = Regex("""\n+|[;\uFF1B\u3002\uFF01\uFF1F]+|(?<=[.!?])(?=\s|$)""")
         private val BULLET_PREFIX_REGEX = Regex("""^(?:[•·\-*]|\d+[.)])\s*""")
         private val WHITESPACE_REGEX = Regex("""\s+""")
         private val LEADING_TOPIC_PREFIX_REGEX = Regex("""^[A-Z][A-Za-z\s-]{0,30}:\s+""")
@@ -612,7 +612,7 @@ class MemoryAnalyzer(
         private val EXPLICIT_ARROW_REGEX = Regex(
             """([\p{L}\p{N}_][\p{L}\p{N}_ .'-]{0,30}?)\s*-{1,2}\s*\[?([^\]\->\n]{1,24}?)\]?\s*-*>\s*([\p{L}\p{N}_][\p{L}\p{N}_ .'-]{0,30})""",
         )
-        private val CLAUSE_SPLIT_REGEX = Regex("""\n+|[;；。！？]+|(?<=[.!?])\s+|,\s+|:\s+""")
+        private val CLAUSE_SPLIT_REGEX = Regex("""\n+|[;\uFF1B\u3002\uFF01\uFF1F]+|(?<=[.!?])\s+|,\s+|:\s+""")
         private val RELATIVE_PRONOUN_REGEX = Regex("""^(?:who|which|that)\b""", RegexOption.IGNORE_CASE)
         private val SUBORDINATOR_REGEX = Regex(
             """\b(?:once|after|before|when|while|because|until|so|but|then|whereas|unless)\b""",
