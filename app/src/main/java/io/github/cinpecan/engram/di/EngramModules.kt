@@ -29,13 +29,13 @@ import io.github.cinpecan.engram.ui.viewmodel.CaptureViewModel
 import io.github.cinpecan.engram.ui.viewmodel.EngineViewModel
 import io.github.cinpecan.engram.ui.viewmodel.GraphViewModel
 import io.github.cinpecan.engram.ui.viewmodel.RawMemoryViewModel
+import io.github.cinpecan.engram.ui.viewmodel.WorkspaceViewModel
 import java.util.concurrent.TimeUnit
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
 import org.koin.android.ext.koin.androidContext
 import org.koin.core.annotation.KoinExperimentalAPI
 import org.koin.core.module.dsl.viewModel
-import org.koin.core.module.dsl.viewModelOf
 import org.koin.dsl.module
 import org.koin.dsl.navigation3.navigation
 
@@ -111,7 +111,24 @@ val dataModule = module {
 
 @OptIn(KoinExperimentalAPI::class)
 val uiModule = module {
-    viewModelOf(::CaptureViewModel)
+    viewModel {
+        WorkspaceViewModel(
+            edgeEngine = get(),
+            preferencesRepository = get(),
+            cloudSessionMonitor = get(),
+            downloadManager = get(),
+            memoryRepository = get(),
+        )
+    }
+    viewModel {
+        CaptureViewModel(
+            memoryRepository = get(),
+            edgeEngine = get(),
+            preferencesRepository = get(),
+            cloudSessionMonitor = get(),
+            downloadManager = get(),
+        )
+    }
     viewModel {
         EngineViewModel(
             edgeEngine = get(),

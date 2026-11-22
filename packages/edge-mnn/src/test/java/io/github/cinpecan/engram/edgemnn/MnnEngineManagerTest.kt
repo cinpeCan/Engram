@@ -26,6 +26,7 @@ class MnnEngineManagerTest {
         val maxObservedConcurrency = AtomicInteger(0)
         var simulatedRssBytes: Long = 512L * 1024 * 1024
         val createdModelDirs = mutableListOf<String>()
+        val chatRequests = mutableListOf<Triple<String, String, String>>()
 
         override fun hasRealMnnBackend(): Boolean = backendAvailable
 
@@ -56,6 +57,25 @@ class MnnEngineManagerTest {
                 callback.onToken("test ")
                 callback.onToken("output")
                 callback.onComplete(ttftMs = 12L, totalMs = 24L, generatedTokens = 2)
+            } finally {
+                activeConcurrency.decrementAndGet()
+            }
+        }
+
+        override fun generateChatStream(
+            sessionHandle: Long,
+            systemPrompt: String,
+            userPrompt: String,
+            maxTokens: Int,
+            callback: NativeStreamCallback,
+        ) {
+            chatRequests.add(Triple(systemPrompt, userPrompt, ""))
+            val current = activeConcurrency.incrementAndGet()
+            maxObservedConcurrency.updateAndGet { prev -> maxOf(prev, current) }
+            try {
+                Thread.sleep(10)
+                callback.onToken("{\"summary\":\"ok\"}")
+                callback.onComplete(ttftMs = 15L, totalMs = 30L, generatedTokens = 3)
             } finally {
                 activeConcurrency.decrementAndGet()
             }
@@ -199,5 +219,32 @@ class MnnEngineManagerTest {
         assertEquals("test output", completed.fullText)
         assertEquals(listOf("/tmp/models/qwen", "/tmp/models/qwen"), bridge.createdModelDirs)
         assertEquals("qwen-0.5b", completed.telemetry.modelId)
+    }
+
+    @Test
+    fun forwardsStructuredChatPromptOnSerialDispatcher() = runTest {
+        val bridge = FakeNativeBridge()
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val manager = MnnEngineManager(
+            nativeBridge = bridge,
+            memoryProvider = { bridge.simulatedRssBytes },
+            serialDispatcher = dispatcher,
+            lifecycleScope = this,
+            coalescer = TokenStreamCoalescer(windowMs = 10L),
+        )
+
+        manager.loadModel("qwen-0.5b", "/tmp/models/qwen")
+        val chunks = manager.streamGenerate(
+            systemPrompt = "Extract JSON",
+            userPrompt = "<note>Buy milk</note>",
+            maxTokens = 128,
+        ).toList()
+
+        val completed = chunks.filterIsInstance<StreamChunk.Completed>().single()
+        assertEquals("{\"summary\":\"ok\"}", completed.fullText)
+        assertEquals(
+            listOf(Triple("Extract JSON", "<note>Buy milk</note>", "")),
+            bridge.chatRequests,
+        )
     }
 }

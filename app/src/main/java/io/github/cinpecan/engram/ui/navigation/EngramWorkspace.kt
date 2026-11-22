@@ -1,7 +1,11 @@
 package io.github.cinpecan.engram.ui.navigation
 
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -13,6 +17,7 @@ import androidx.compose.foundation.layout.calculateEndPadding
 import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.only
@@ -25,19 +30,23 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarDuration
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.SnackbarResult
+import androidx.compose.material3.Snackbar
+import androidx.compose.material3.SnackbarDefaults
+import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.material3.rememberTopAppBarState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -45,6 +54,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.navigation3.rememberViewModelStoreNavEntryDecorator
@@ -52,17 +62,16 @@ import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.runtime.rememberSaveableStateHolderNavEntryDecorator
 import androidx.navigation3.scene.SinglePaneSceneStrategy
 import androidx.navigation3.ui.NavDisplay
-import io.github.cinpecan.engram.data.preferences.EnginePreferences
-import io.github.cinpecan.engram.data.preferences.EnginePreferencesRepository
-import io.github.cinpecan.engram.data.repository.CloudSessionMonitor
-import io.github.cinpecan.engram.data.repository.CloudSessionState
-import io.github.cinpecan.engram.domain.model.InferenceMode
-import io.github.cinpecan.engram.edgemnn.EdgeAiEngine
-import io.github.cinpecan.engram.edgemnn.EngineState
 import io.github.cinpecan.engram.ui.components.ExpressivePillSurface
 import io.github.cinpecan.engram.ui.theme.transparentize
-import org.koin.compose.koinInject
+import io.github.cinpecan.engram.ui.viewmodel.TopBarDotTone
+import io.github.cinpecan.engram.ui.viewmodel.TopBarStatusUi
+import io.github.cinpecan.engram.ui.viewmodel.WorkspaceEffect
+import io.github.cinpecan.engram.ui.viewmodel.WorkspaceIntent
+import io.github.cinpecan.engram.ui.viewmodel.WorkspaceNoticeUi
+import io.github.cinpecan.engram.ui.viewmodel.WorkspaceViewModel
 import org.koin.compose.navigation3.koinEntryProvider
+import org.koin.compose.viewmodel.koinViewModel
 import org.koin.core.annotation.KoinExperimentalAPI
 
 val LocalWorkspaceContentPadding = compositionLocalOf { PaddingValues(0.dp) }
@@ -74,30 +83,35 @@ val LocalWorkspaceContentPadding = compositionLocalOf { PaddingValues(0.dp) }
 @Composable
 fun EngramWorkspace(
     modifier: Modifier = Modifier,
-    edgeEngine: EdgeAiEngine = koinInject(),
-    preferencesRepository: EnginePreferencesRepository = koinInject(),
-    cloudSessionMonitor: CloudSessionMonitor = koinInject(),
+    workspaceViewModel: WorkspaceViewModel = koinViewModel(),
 ) {
     val navigator = rememberEngramNavigator()
-    val engineState by edgeEngine.state.collectAsStateWithLifecycle()
-    val cloudSessionState by cloudSessionMonitor.state.collectAsStateWithLifecycle()
-    val prefs by preferencesRepository.preferencesFlow.collectAsStateWithLifecycle(
-        initialValue = EnginePreferences(),
-    )
+    val topBarStatus by workspaceViewModel.topBarStatus.collectAsStateWithLifecycle()
+    val activeNotice by workspaceViewModel.activeNotice.collectAsStateWithLifecycle()
 
-    val snackbarHostState = remember { SnackbarHostState() }
-    LaunchedEffect(navigator) {
-        navigator.snackbarEvents.collect { event ->
-            snackbarHostState.currentSnackbarData?.dismiss()
-            val result = snackbarHostState.showSnackbar(
-                message = event.message,
-                actionLabel = event.actionLabel,
-                duration = SnackbarDuration.Short,
-            )
-            if (result == SnackbarResult.ActionPerformed) {
-                event.onAction?.invoke()
+    LaunchedEffect(navigator, workspaceViewModel) {
+        navigator.noticeRequests.collect { request ->
+            if (request == null) {
+                workspaceViewModel.onIntent(WorkspaceIntent.DismissNotice)
+            } else {
+                workspaceViewModel.onIntent(WorkspaceIntent.ShowNotice(request))
             }
         }
+    }
+
+    LaunchedEffect(navigator, workspaceViewModel) {
+        workspaceViewModel.effects.collect { effect ->
+            when (effect) {
+                WorkspaceEffect.OpenEngineSheet -> navigator.openOverlay(EngramNavKey.EngineSheet)
+            }
+        }
+    }
+
+    val isOverlayOpen by remember(navigator) {
+        derivedStateOf { navigator.backStack.lastOrNull() is EngramNavKey.Overlay }
+    }
+    LaunchedEffect(isOverlayOpen, workspaceViewModel) {
+        workspaceViewModel.onIntent(WorkspaceIntent.OnOverlayPresenceChanged(isOverlayOpen))
     }
 
     val topBarState = rememberTopAppBarState()
@@ -120,11 +134,11 @@ fun EngramWorkspace(
                 .union(WindowInsets.displayCutout)
                 .only(WindowInsetsSides.Horizontal),
             snackbarHost = {
-                SnackbarHost(
-                    hostState = snackbarHostState,
-                    modifier = Modifier
-                        .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))
-                        .padding(bottom = navigator.bottomConsoleClearanceDp + 8.dp),
+                WorkspaceNoticeHost(
+                    notice = activeNotice,
+                    bottomClearanceDp = navigator.bottomConsoleClearanceDp,
+                    onAction = { workspaceViewModel.onIntent(WorkspaceIntent.PerformNoticeAction) },
+                    onDismiss = { workspaceViewModel.onIntent(WorkspaceIntent.DismissNotice) },
                 )
             },
             topBar = {
@@ -138,9 +152,7 @@ fun EngramWorkspace(
                     scrollBehavior = topBarScrollBehavior,
                     actions = {
                         EngineStatusPill(
-                            engineState = engineState,
-                            inferenceMode = prefs.inferenceMode,
-                            cloudSessionState = cloudSessionState,
+                            status = topBarStatus,
                             onClick = { navigator.openOverlay(EngramNavKey.EngineSheet) },
                             modifier = Modifier.padding(end = 12.dp),
                         )
@@ -172,28 +184,72 @@ fun EngramWorkspace(
 }
 
 @Composable
+private fun WorkspaceNoticeHost(
+    notice: WorkspaceNoticeUi?,
+    bottomClearanceDp: Dp,
+    onAction: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AnimatedContent(
+        targetState = notice,
+        transitionSpec = {
+            fadeIn(spring(stiffness = 700f)) togetherWith fadeOut(spring(stiffness = 900f))
+        },
+        contentKey = { it?.id },
+        label = "workspaceNotice",
+        modifier = Modifier
+            .fillMaxWidth()
+            .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))
+            .padding(
+                start = 12.dp,
+                end = 12.dp,
+                bottom = bottomClearanceDp + 8.dp,
+            ),
+    ) { currentNotice ->
+        if (currentNotice != null) {
+            key(currentNotice.id) {
+                val dismissState = rememberSwipeToDismissBoxState()
+                LaunchedEffect(dismissState.currentValue) {
+                    if (dismissState.currentValue != SwipeToDismissBoxValue.Settled) {
+                        onDismiss()
+                    }
+                }
+                SwipeToDismissBox(
+                    state = dismissState,
+                    backgroundContent = {},
+                ) {
+                    Snackbar(
+                        action = currentNotice.actionLabel?.let { label ->
+                            {
+                                TextButton(onClick = onAction) {
+                                    Text(
+                                        text = label,
+                                        color = SnackbarDefaults.actionColor,
+                                    )
+                                }
+                            }
+                        },
+                    ) {
+                        Text(text = currentNotice.message)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun EngineStatusPill(
-    engineState: EngineState,
-    inferenceMode: InferenceMode,
-    cloudSessionState: CloudSessionState,
+    status: TopBarStatusUi,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val targetDotColor = when {
-        engineState is EngineState.Loading || engineState is EngineState.Releasing -> Color(0xFFFFA000)
-        engineState is EngineState.Generating -> Color(0xFF1E88E5)
-        engineState is EngineState.Error -> MaterialTheme.colorScheme.error
-        inferenceMode == InferenceMode.CLOUD_COLLAB -> when (cloudSessionState) {
-            is CloudSessionState.Ready -> Color(0xFF2E7D32)
-            CloudSessionState.Verifying -> Color(0xFFFFA000)
-            CloudSessionState.IdleUnconfigured,
-            CloudSessionState.InvalidToken,
-            CloudSessionState.QuotaExhausted,
-            CloudSessionState.Unreachable,
-            -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
-        }
-        engineState is EngineState.Ready -> Color(0xFF2E7D32)
-        else -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
+    val targetDotColor = when (status.tone) {
+        TopBarDotTone.LOADING -> Color(0xFFFFA000)
+        TopBarDotTone.GENERATING -> Color(0xFF1E88E5)
+        TopBarDotTone.ERROR -> MaterialTheme.colorScheme.error
+        TopBarDotTone.READY -> Color(0xFF2E7D32)
+        TopBarDotTone.IDLE -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
     }
 
     val dotColor by animateColorAsState(
@@ -202,23 +258,6 @@ private fun EngineStatusPill(
         label = "engineDotColor",
     )
 
-    val text = when {
-        engineState is EngineState.Loading -> "Loading model…"
-        engineState is EngineState.Generating -> "Running on-device…"
-        engineState is EngineState.Releasing -> "Freeing memory…"
-        inferenceMode == InferenceMode.CLOUD_COLLAB -> when (cloudSessionState) {
-            is CloudSessionState.Ready -> "Cloud ready"
-            CloudSessionState.Verifying -> "Verifying…"
-            CloudSessionState.IdleUnconfigured,
-            CloudSessionState.InvalidToken,
-            CloudSessionState.QuotaExhausted,
-            CloudSessionState.Unreachable,
-            -> "Cloud offline"
-        }
-        engineState is EngineState.Ready -> "Qwen 0.5B · Ready"
-        else -> "On-device"
-    }
-
     ExpressivePillSurface(
         onClick = onClick,
         modifier = modifier,
@@ -226,7 +265,7 @@ private fun EngineStatusPill(
         pressedCorner = 10.dp,
         containerColor = MaterialTheme.colorScheme.surfaceVariant,
         contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-        contentDescription = "Inference & Sync: $text",
+        contentDescription = "Inference & Sync: ${status.label}",
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
@@ -240,7 +279,7 @@ private fun EngineStatusPill(
                     .background(dotColor),
             )
             Text(
-                text = text,
+                text = status.label,
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

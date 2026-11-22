@@ -16,12 +16,12 @@
 ### 记录即提炼，摘要逐字流式呈现
 - 单屏 Material 3 Expressive 工作区：一条无标题时间线，一个对称输入框。没有 Tab，也没有模式切换。
 - 随手记优先交给云端网关提炼（Vertex AI Gemini，SSE 流式）；离线时交给端侧 MNN。模型还在输出 JSON 时，增量解析器（`PartialJsonSummaryExtractor`）就把 `summary` 字段实时提取出来，按正式分点逐字显示，界面上看不到原始 JSON。
-- 每张卡片都标出实际生成它的引擎，例如 `Gemini 3.5 Flash-Lite · TTFT 899ms · 103.9 tok/s`、`Qwen2.5 0.5B · MNN · …`、`Cloud fallback · …`。不伪造状态：没有模型或体验码时，卡片会如实说明，并改用确定性的本地提炼。
+- 每张卡片都标出实际生成它的引擎，例如 `Gemini 3.5 Flash-Lite · TTFT 899ms · 103.9 tok/s`、`Qwen2.5 0.5B · MNN · …`、`Cloud fallback · …`。不伪造状态：离线模型未就绪时会在发送前直接提示；云端缺少有效访问令牌且无端侧模型时，卡片会如实说明原因，并改用确定性的本地提炼。
 
 ### 向记忆提问：端侧 GraphRAG，不增加任何界面
-- 输入内容以 **`?`** 结尾，发送箭头就变成星芒图标。这句话会被当作提问来回答，不会存成记忆。
+- 输入内容以 **`?`**（或 **`？`**）结尾，发送箭头就变成星芒图标。这句话会被当作提问来回答，不会存成记忆。
 - **检索**由两路互不重叠的通道组成，用 **RRF（倒数秩融合）** 合并排序：
-  - **词法通道**：Room **FTS4 全文索引 + SQLite `porter` 词干分词**（搜 `quoting` 能命中 `quoted`）。索引是外部内容表，由 Room 触发器自动保持同步。
+  - **词法通道**：Room **FTS4 全文索引 + SQLite `porter` 词干分词**（搜 `quoting` 能命中 `quoted`），由外部内容表与 Room 触发器自动保持同步，并配合中文 2-gram 切分与 1 编辑距离拼写容错。
   - **图谱通道**：以问题里提到的实体为起点，在所有记忆的关系三元组构成的实体图上做 **2 跳广度优先遍历**。这样能找到根本不含查询词的记忆：问 *Helios Display*，会沿 `Helios Display — Micro-OLED Module — Liam Chen` 找到另一条记忆里的财务卡点。
 - **回答面板**：带引用的回答流式输出，`[n]` 显示为可点击的小标签，点开即跳到原文。下方列出来源标签（*Keyword match · 2-hop link*），以及一张内嵌的**推理关系图（Reasoning Graph）**：用 Deponder 物理画布展示本次遍历的跨记忆子图，并高亮问题里的实体。
 - **如实降级**：云端 → 端侧 MNN → 仅展示检索结果（*"No model loaded · Showing matched memories"*）。不会编造答案。
@@ -39,7 +39,7 @@
 ### 云端网关（`server/`）
 - FastAPI 服务，接入 Vertex AI `gemini-3.5-flash-lite`（`google-genai`，`location="global"`），也可接任意 OpenAI 兼容上游。
 - **接口**：`POST /api/v1/analyze/stream`（提炼）、`POST /api/v1/answer/stream`（GraphRAG 引用回答）、`POST /api/v1/memories/sync` 与 `/delete`（多设备最后写入优先同步 + 删除墓碑）、`GET /api/v1/auth/status`（零成本会话探测）。
-- **访问控制**：无状态 7 天 HMAC Bearer 体验码，配合原子化的单码次数与月度费用账本；建流前失败会自动退还额度。
+- **访问控制**：无状态 7 天 HMAC Bearer 访问令牌，配合原子化的单令牌次数与月度费用账本；建流前失败会自动退还额度。
 - **客户端默认网关**：地址在编译期从 `local.properties` 读取，并用 AES-256-GCM 加密写入，Git 与 DEX 中都没有明文。
 
 ### 契约优先

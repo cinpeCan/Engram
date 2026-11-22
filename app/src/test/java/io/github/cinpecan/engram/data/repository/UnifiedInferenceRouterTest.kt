@@ -33,10 +33,25 @@ class UnifiedInferenceRouterTest {
         private val emittedJson: String? = null,
     ) : EdgeAiEngine {
         var generateCalled = false
+        var lastSystemPrompt: String? = null
+        var lastUserPrompt: String? = null
         override val state: StateFlow<EngineState> = MutableStateFlow(initialState)
         override val lastTelemetry: StateFlow<InferenceTelemetry?> = MutableStateFlow(null)
 
         override suspend fun loadModel(modelId: String, modelDirPath: String) = Result.success(Unit)
+
+        override fun streamGenerate(
+            systemPrompt: String,
+            userPrompt: String,
+            maxTokens: Int,
+        ): Flow<StreamChunk> {
+            lastSystemPrompt = systemPrompt
+            lastUserPrompt = userPrompt
+            return streamGenerate(
+                listOf(systemPrompt, userPrompt).filter { it.isNotEmpty() }.joinToString("\n\n"),
+                maxTokens,
+            )
+        }
 
         override fun streamGenerate(prompt: String, maxTokens: Int): Flow<StreamChunk> = flow {
             generateCalled = true
@@ -103,6 +118,8 @@ class UnifiedInferenceRouterTest {
         ).toList()
 
         assertTrue(realEdge.generateCalled)
+        assertEquals("", realEdge.lastSystemPrompt)
+        assertTrue(realEdge.lastUserPrompt.orEmpty().contains("Marcus Cole and Sarah Jenkins align the contract clauses"))
         assertTrue(events.any { it is DistillationEvent.StreamingPreview })
         val completed = events.filterIsInstance<DistillationEvent.Completed>().single()
         assertEquals(AnalysisSource.MNN_EDGE, completed.source)
@@ -289,5 +306,70 @@ class UnifiedInferenceRouterTest {
         assertEquals("Gemini 2.5 Pro", UnifiedInferenceRouter.humanizeModelName("gemini-2.5-pro"))
         assertEquals("custom-llm", UnifiedInferenceRouter.humanizeModelName("custom-llm"))
         assertEquals("Qwen2.5 0.5B", UnifiedInferenceRouter.humanizeEdgeModelName("qwen2.5-0.5b-instruct-mnn"))
+    }
+
+    @Test
+    fun skipCloudAttemptJumpsDirectlyToEdgeAndScrubsStreamingPrefixArtifacts() = runTest {
+        var cloudHits = 0
+        val countingHttp = OkHttpClient.Builder()
+            .addInterceptor { chain ->
+                cloudHits++
+                Response.Builder()
+                    .request(chain.request())
+                    .protocol(Protocol.HTTP_1_1)
+                    .code(500)
+                    .message("Unexpected")
+                    .body("{}".toResponseBody("application/json".toMediaType()))
+                    .build()
+            }
+            .build()
+
+        val validJson = """
+            {"summary":"• First point: Review the addendum tomorrow","tags":["Legal"],"calendarProposal":null,"relations":[]}
+        """.trimIndent()
+        val readyEdge = FakeEdgeEngine(
+            isBackendAvailable = true,
+            initialState = EngineState.Ready("qwen2.5-0.5b-instruct-mnn", "MNN-LLM (ARM64)", 400L * 1024 * 1024),
+            emittedJson = validJson,
+        )
+        val router = UnifiedInferenceRouter(readyEdge, CloudSseClient(countingHttp), MemoryAnalyzer())
+
+        val events = router.distillMemory(
+            content = "Review the contract addendum tomorrow at 3:00 PM with Sarah Jenkins",
+            nowMillis = 1_700_000_000_000L,
+            mode = InferenceMode.CLOUD_COLLAB,
+            serverBaseUrl = "http://127.0.0.1:8787",
+            skipCloudAttempt = true,
+        ).toList()
+
+        assertEquals(0, cloudHits)
+        assertTrue(readyEdge.generateCalled)
+        val previews = events.filterIsInstance<DistillationEvent.StreamingPreview>()
+        assertTrue(previews.none { it.partialText.contains("First point:", ignoreCase = true) })
+        val completed = events.filterIsInstance<DistillationEvent.Completed>().single()
+        assertEquals(AnalysisSource.MNN_EDGE, completed.source)
+        assertTrue(completed.telemetryBadge.startsWith("Cloud fallback · Qwen2.5 0.5B · "))
+    }
+
+    @Test
+    fun offlineModeFallsBackQuietlyWithoutBadgeOnInvalidEdgeOutput() = runTest {
+        val brokenEdge = FakeEdgeEngine(
+            isBackendAvailable = true,
+            initialState = EngineState.Ready("qwen2.5-0.5b-instruct-mnn", "MNN-LLM (ARM64)", 400L * 1024 * 1024),
+            emittedJson = "{\"summary\":\"unterminated repetition...",
+        )
+        val router = UnifiedInferenceRouter(brokenEdge, CloudSseClient(buildMockSseOkHttp(null)), MemoryAnalyzer())
+
+        val events = router.distillMemory(
+            content = "Check sample shipment tomorrow at 3pm",
+            nowMillis = 1_700_000_000_000L,
+            mode = InferenceMode.OFFLINE_EDGE,
+            serverBaseUrl = "http://127.0.0.1:8787",
+        ).toList()
+
+        assertTrue(brokenEdge.generateCalled)
+        val completed = events.filterIsInstance<DistillationEvent.Completed>().single()
+        assertEquals(AnalysisSource.LOCAL_RULE_FALLBACK, completed.source)
+        assertEquals("", completed.telemetryBadge)
     }
 }

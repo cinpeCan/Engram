@@ -117,7 +117,18 @@ class MnnEngineManager(
             }
         }
 
-    override fun streamGenerate(prompt: String, maxTokens: Int): Flow<StreamChunk> = channelFlow {
+    override fun streamGenerate(prompt: String, maxTokens: Int): Flow<StreamChunk> =
+        streamGenerate(
+            systemPrompt = "",
+            userPrompt = prompt,
+            maxTokens = maxTokens,
+        )
+
+    override fun streamGenerate(
+        systemPrompt: String,
+        userPrompt: String,
+        maxTokens: Int,
+    ): Flow<StreamChunk> = channelFlow {
         uiHiddenUnloadJob?.cancel()
         uiHiddenUnloadJob = null
 
@@ -135,22 +146,33 @@ class MnnEngineManager(
                     var total = 1L
                     var tokenCount = 0
 
-                    nativeBridge.generateStream(
-                        sessionHandle = sessionHandle,
-                        prompt = prompt,
-                        maxTokens = maxTokens,
-                        callback = object : NativeStreamCallback {
-                            override fun onToken(delta: String) {
-                                rawTokenChannel.trySend(delta)
-                            }
+                    val streamCallback = object : NativeStreamCallback {
+                        override fun onToken(delta: String) {
+                            rawTokenChannel.trySend(delta)
+                        }
 
-                            override fun onComplete(ttftMs: Long, totalMs: Long, generatedTokens: Int) {
-                                ttft = ttftMs
-                                total = totalMs.coerceAtLeast(1L)
-                                tokenCount = generatedTokens
-                            }
-                        },
-                    )
+                        override fun onComplete(ttftMs: Long, totalMs: Long, generatedTokens: Int) {
+                            ttft = ttftMs
+                            total = totalMs.coerceAtLeast(1L)
+                            tokenCount = generatedTokens
+                        }
+                    }
+                    if (systemPrompt.isNotEmpty()) {
+                        nativeBridge.generateChatStream(
+                            sessionHandle = sessionHandle,
+                            systemPrompt = systemPrompt,
+                            userPrompt = userPrompt,
+                            maxTokens = maxTokens,
+                            callback = streamCallback,
+                        )
+                    } else {
+                        nativeBridge.generateStream(
+                            sessionHandle = sessionHandle,
+                            prompt = userPrompt,
+                            maxTokens = maxTokens,
+                            callback = streamCallback,
+                        )
+                    }
 
                     val tokPerSec = if (total > 0L) {
                         tokenCount.toDouble() * 1000.0 / total.toDouble()

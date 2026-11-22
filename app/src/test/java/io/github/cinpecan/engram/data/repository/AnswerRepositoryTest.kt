@@ -10,7 +10,9 @@ import io.github.cinpecan.engram.data.seed.SeedStorylineProvider
 import io.github.cinpecan.engram.domain.model.AnalysisSource
 import io.github.cinpecan.engram.domain.model.InferenceMode
 import io.github.cinpecan.engram.domain.model.MemoryAnalysisPayload
+import io.github.cinpecan.engram.domain.model.MemoryAnalysisStatus
 import io.github.cinpecan.engram.domain.model.MemoryItem
+import io.github.cinpecan.engram.domain.model.RelationTriple
 import io.github.cinpecan.engram.edgemnn.EdgeAiEngine
 import io.github.cinpecan.engram.edgemnn.EngineState
 import io.github.cinpecan.engram.edgemnn.InferenceTelemetry
@@ -303,5 +305,74 @@ class AnswerRepositoryTest {
         repo.ask("Why is the Helios Display deposit on hold?").toList()
         advanceUntilIdle()
         assertEquals(CloudSessionState.InvalidToken, monitor.state.value)
+    }
+
+    @Test
+    fun cjkQuestionMatchesPinyinMemoryUsesChineseEdgePromptAndRedactsPasswords() = runTest {
+        val pinyinMemory = MemoryItem(
+            id = "mem-pinyin-1",
+            content = "wo yao chi niurou, xiang yao he ww, yy yi qi wan.",
+            summary = "\u2022 \u6211\u8981\u5403\u725B\u8089\n\u2022 \u60F3\u548C ww\u3001yy \u4E00\u8D77\u73A9",
+            tags = listOf("\u996E\u98DF", "\u5A31\u4E50"),
+            createdAtMillis = 1_800_000_000_000L,
+            analysisStatus = MemoryAnalysisStatus.READY,
+            calendarProposal = null,
+            calendarSaved = false,
+            relations = listOf(
+                RelationTriple(
+                    id = "r1",
+                    memoryId = "mem-pinyin-1",
+                    source = "\u6211",
+                    target = "\u725B\u8089",
+                    relation = "\u60F3\u5403",
+                ),
+            ),
+        )
+        val secretMemory = MemoryItem(
+            id = "mem-secret-1",
+            content = "\u6D4B\u8BD5\u540E\u53F0\u8D26\u53F7 admin \u5BC6\u7801 Qwerty#2026",
+            summary = "\u540E\u53F0\u5BC6\u7801\u8BE6\u89C1\u539F\u6587",
+            tags = listOf("\u8D26\u53F7\u51ED\u8BC1"),
+            createdAtMillis = 1_800_000_001_000L,
+            analysisStatus = MemoryAnalysisStatus.READY,
+            calendarProposal = null,
+            calendarSaved = false,
+            relations = emptyList(),
+        )
+        val edge = FakeEdge(
+            isBackendAvailable = true,
+            reply = "\u4F60\u8981\u5403\u725B\u8089\uFF0C\u5E76\u60F3\u548C ww\u3001yy \u4E00\u8D77\u73A9 [1]\u3002",
+        )
+        val repo = AnswerRepository(
+            store = SeedStore(listOf(pinyinMemory, secretMemory)),
+            edgeEngine = edge,
+            cloudSseClient = CloudSseClient(OkHttpClient(), json),
+        )
+
+        val events = repo.ask("\u6211\u8981\u5403\u4EC0\u4E48\uFF0C\u60F3\u548C\u8C01\u4E00\u8D77\u73A9\uFF1F").toList()
+        val retrieved = events.first() as AnswerEvent.Retrieved
+        val citation = retrieved.result.citations.first()
+        assertEquals("mem-pinyin-1", citation.memoryId)
+        assertTrue(citation.contextText.contains("\u725B\u8089"))
+        assertTrue(citation.contextText.contains("ww"))
+
+        val prompt = requireNotNull(edge.lastPrompt)
+        assertTrue(prompt.contains("\u5370\u8FF9"))
+        assertTrue(prompt.contains("\u95EE\u9898\uFF1A\u6211\u8981\u5403\u4EC0\u4E48"))
+
+        val leakyEdge = FakeEdge(
+            isBackendAvailable = true,
+            reply = "\u6D4B\u8BD5\u540E\u53F0\u5BC6\u7801 Qwerty#2026 [1]\u3002",
+        )
+        val redactingRepo = AnswerRepository(
+            store = SeedStore(listOf(secretMemory)),
+            edgeEngine = leakyEdge,
+            cloudSseClient = CloudSseClient(OkHttpClient(), json),
+        )
+        val secretCompleted = redactingRepo.ask("\u6D4B\u8BD5\u540E\u53F0\u5BC6\u7801\u662F\u591A\u5C11\uFF1F")
+            .toList()
+            .last() as AnswerEvent.Completed
+        org.junit.Assert.assertFalse(secretCompleted.text.contains("Qwerty#2026"))
+        assertTrue(secretCompleted.text.contains("\u8BE6\u89C1\u539F\u6587"))
     }
 }

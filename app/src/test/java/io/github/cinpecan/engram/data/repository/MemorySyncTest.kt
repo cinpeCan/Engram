@@ -89,11 +89,6 @@ class MemorySyncTest {
             tombstones[memoryId] = deletedAtMillis
         }
 
-        override suspend fun restoreMemory(item: MemoryItem) {
-            tombstones.remove(item.id)
-            items.value = (listOf(item) + items.value).sortedByDescending { it.createdAtMillis }
-        }
-
         override suspend fun getDeletedTombstones(): Map<String, Long> = tombstones.toMap()
     }
 

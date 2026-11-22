@@ -5,6 +5,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <memory>
 #include <ostream>
@@ -27,6 +28,16 @@ struct EngramNativeSession {
     std::unique_ptr<MNN::Transformer::Llm> llm;
 #endif
 };
+
+std::string JStringToUtf8(JNIEnv* env, jstring value) {
+    if (value == nullptr) return "";
+    const char* chars = env->GetStringUTFChars(value, nullptr);
+    std::string out = chars != nullptr ? chars : "";
+    if (chars != nullptr) {
+        env->ReleaseStringUTFChars(value, chars);
+    }
+    return out;
+}
 
 jstring Utf8ToJString(JNIEnv* env, const std::string& utf8) {
     std::vector<jchar> utf16;
@@ -80,7 +91,8 @@ public:
         on_token_method_(on_token_method),
         session_(session),
         start_time_(start_time),
-        max_tokens_(max_tokens) {}
+        max_tokens_(max_tokens) {
+    }
 
     int64_t ttft_ms() const { return ttft_ms_ >= 0 ? ttft_ms_ : 0; }
     int generated_tokens() const { return token_count_; }
@@ -100,6 +112,15 @@ public:
         ++token_count_;
         std::string chunk = pending_utf8_.substr(0, emit_len);
         pending_utf8_.erase(0, emit_len);
+        emitted_tail_.append(chunk);
+        if (emitted_tail_.size() > 1024) {
+            emitted_tail_.erase(0, emitted_tail_.size() - 512);
+        }
+        if (session_ != nullptr &&
+            !session_->cancel_requested.load() &&
+            HasPeriodicRepetitionTail(emitted_tail_)) {
+            session_->cancel_requested.store(true);
+        }
         jstring jdelta = Utf8ToJString(env_, chunk);
         if (jdelta != nullptr) {
             env_->CallVoidMethod(callback_, on_token_method_, jdelta);
@@ -120,6 +141,12 @@ protected:
             session_->cancel_requested.store(true);
             return n;
         }
+
+        if (ttft_ms_ < 0) {
+            auto now = std::chrono::steady_clock::now();
+            ttft_ms_ = std::chrono::duration_cast<std::chrono::milliseconds>(now - start_time_).count();
+        }
+
         pending_utf8_.append(s, static_cast<size_t>(n));
         FlushValidUtf8Prefix(false);
         return n;
@@ -163,6 +190,22 @@ private:
         return (available < expected_len) ? lead_idx : size;
     }
 
+    static bool HasPeriodicRepetitionTail(const std::string& tail) {
+        constexpr size_t kMinPeriod = 3;
+        constexpr size_t kMaxPeriod = 24;
+        constexpr size_t kRepeatCount = 6;
+        const size_t total = tail.size();
+        for (size_t period = kMinPeriod; period <= kMaxPeriod; ++period) {
+            const size_t window = period * kRepeatCount;
+            if (total < window) break;
+            const char* start = tail.data() + (total - window);
+            if (std::memcmp(start, start + period, window - period) == 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     JNIEnv* env_;
     jobject callback_;
     jmethodID on_token_method_;
@@ -172,7 +215,88 @@ private:
     int64_t ttft_ms_{-1};
     int token_count_{0};
     std::string pending_utf8_;
+    std::string emitted_tail_;
 };
+
+void RunGenerateStream(
+    JNIEnv* env,
+    jlong handle,
+    const std::string& system_str,
+    const std::string& user_str,
+    jint max_tokens,
+    jobject callback
+) {
+    if (handle == 0 || callback == nullptr) return;
+    auto* session = reinterpret_cast<EngramNativeSession*>(handle);
+    if (session->released.load()) return;
+
+    session->cancel_requested.store(false);
+
+    jclass cb_cls = env->GetObjectClass(callback);
+    jmethodID on_token_id = env->GetMethodID(cb_cls, "onToken", "(Ljava/lang/String;)V");
+    jmethodID on_complete_id = env->GetMethodID(cb_cls, "onComplete", "(JJI)V");
+    if (on_token_id == nullptr || on_complete_id == nullptr) {
+        env->DeleteLocalRef(cb_cls);
+        return;
+    }
+
+    const auto start_time = std::chrono::steady_clock::now();
+    int64_t ttft_ms = 0;
+    int generated_tokens = 0;
+
+#if ENGRAM_HAS_MNN_LIB
+    if (session->llm != nullptr) {
+        session->llm->reset();
+        CallbackStreamBuf stream_buf(env, callback, on_token_id, session, start_time, max_tokens);
+        std::ostream os(&stream_buf);
+        if (!system_str.empty()) {
+            MNN::Transformer::ChatMessages messages;
+            messages.emplace_back("system", system_str);
+            messages.emplace_back("user", user_str);
+            session->llm->response(messages, &os, "", 0);
+        } else {
+            session->llm->response(user_str, &os, "", 0);
+        }
+
+        while (!session->llm->stoped() &&
+               !session->cancel_requested.load() &&
+               stream_buf.generated_tokens() < max_tokens) {
+            session->llm->generate(1);
+        }
+        os.flush();
+        stream_buf.FlushValidUtf8Prefix(true);
+        ttft_ms = stream_buf.ttft_ms();
+        generated_tokens = stream_buf.generated_tokens();
+
+        const auto end_time = std::chrono::steady_clock::now();
+        const int64_t total_ms = std::max<int64_t>(
+            1,
+            std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count()
+        );
+        env->CallVoidMethod(
+            callback,
+            on_complete_id,
+            static_cast<jlong>(ttft_ms),
+            static_cast<jlong>(total_ms),
+            static_cast<jint>(generated_tokens)
+        );
+        env->DeleteLocalRef(cb_cls);
+        return;
+    }
+#endif
+
+    (void)system_str;
+    (void)user_str;
+    (void)max_tokens;
+    env->CallVoidMethod(
+        callback,
+        on_complete_id,
+        static_cast<jlong>(0),
+        static_cast<jlong>(1),
+        static_cast<jint>(0)
+    );
+    env->DeleteLocalRef(cb_cls);
+}
 
 } // namespace
 
@@ -202,11 +326,7 @@ Java_io_github_cinpecan_engram_edgemnn_JniNativeBridge_nativeCreateSession(
     __android_log_print(ANDROID_LOG_WARN, kLogTag, "MNN native libraries are not bundled; refusing session creation");
     return 0;
 #else
-    const char* dir_chars = env->GetStringUTFChars(model_dir, nullptr);
-    std::string dir_path = dir_chars != nullptr ? dir_chars : "";
-    if (dir_chars != nullptr) {
-        env->ReleaseStringUTFChars(model_dir, dir_chars);
-    }
+    const std::string dir_path = JStringToUtf8(env, model_dir);
 
     std::error_code ec;
     const std::filesystem::path config_path = std::filesystem::path(dir_path) / "config.json";
@@ -224,6 +344,13 @@ Java_io_github_cinpecan_engram_edgemnn_JniNativeBridge_nativeCreateSession(
         __android_log_print(ANDROID_LOG_ERROR, kLogTag, "MNN Llm::load failed for %s", dir_path.c_str());
         MNN::Transformer::Llm::destroy(raw_llm);
         return 0;
+    }
+
+    const std::string initial_cfg = raw_llm->dump_config();
+    if (initial_cfg.find("\"sampler_type\"") == std::string::npos) {
+        static constexpr const char* kDefaultEdgeSamplerJson =
+            R"({"sampler_type":"mixed","mixed_samplers":["penalty","topK","topP","temperature"],"repetition_penalty":1.05,"penalty_window":64,"ngram_factor":1.0,"topK":20,"topP":0.8,"temperature":0.15})";
+        (void)raw_llm->set_config(kDefaultEdgeSamplerJson);
     }
 
     auto session = std::make_unique<EngramNativeSession>();
@@ -270,71 +397,23 @@ Java_io_github_cinpecan_engram_edgemnn_JniNativeBridge_nativeGenerateStream(
     jint max_tokens,
     jobject callback
 ) {
-    if (handle == 0 || callback == nullptr) return;
-    auto* session = reinterpret_cast<EngramNativeSession*>(handle);
-    if (session->released.load()) return;
+    const std::string prompt_str = JStringToUtf8(env, prompt);
+    RunGenerateStream(env, handle, "", prompt_str, max_tokens, callback);
+}
 
-    session->cancel_requested.store(false);
-
-    jclass cb_cls = env->GetObjectClass(callback);
-    jmethodID on_token_id = env->GetMethodID(cb_cls, "onToken", "(Ljava/lang/String;)V");
-    jmethodID on_complete_id = env->GetMethodID(cb_cls, "onComplete", "(JJI)V");
-    if (on_token_id == nullptr || on_complete_id == nullptr) {
-        env->DeleteLocalRef(cb_cls);
-        return;
-    }
-
-    const char* prompt_chars = env->GetStringUTFChars(prompt, nullptr);
-    std::string prompt_str = prompt_chars != nullptr ? prompt_chars : "";
-    if (prompt_chars != nullptr) {
-        env->ReleaseStringUTFChars(prompt, prompt_chars);
-    }
-
-    const auto start_time = std::chrono::steady_clock::now();
-    int64_t ttft_ms = 0;
-    int generated_tokens = 0;
-
-#if ENGRAM_HAS_MNN_LIB
-    if (session->llm != nullptr) {
-        session->llm->reset();
-        CallbackStreamBuf stream_buf(env, callback, on_token_id, session, start_time, max_tokens);
-        std::ostream os(&stream_buf);
-        session->llm->response(prompt_str, &os, "", 0);
-        while (!session->llm->stoped() &&
-               !session->cancel_requested.load() &&
-               stream_buf.generated_tokens() < max_tokens) {
-            session->llm->generate(1);
-        }
-        os.flush();
-        stream_buf.FlushValidUtf8Prefix(true);
-        ttft_ms = stream_buf.ttft_ms();
-        generated_tokens = stream_buf.generated_tokens();
-
-        const auto end_time = std::chrono::steady_clock::now();
-        const int64_t total_ms = std::max<int64_t>(
-            1,
-            std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count()
-        );
-        env->CallVoidMethod(
-            callback,
-            on_complete_id,
-            static_cast<jlong>(ttft_ms),
-            static_cast<jlong>(total_ms),
-            static_cast<jint>(generated_tokens)
-        );
-        env->DeleteLocalRef(cb_cls);
-        return;
-    }
-#endif
-
-    env->CallVoidMethod(
-        callback,
-        on_complete_id,
-        static_cast<jlong>(0),
-        static_cast<jlong>(1),
-        static_cast<jint>(0)
-    );
-    env->DeleteLocalRef(cb_cls);
+JNIEXPORT void JNICALL
+Java_io_github_cinpecan_engram_edgemnn_JniNativeBridge_nativeGenerateChatStream(
+    JNIEnv* env,
+    jobject /*thiz*/,
+    jlong handle,
+    jstring system_prompt,
+    jstring user_prompt,
+    jint max_tokens,
+    jobject callback
+) {
+    const std::string system_str = JStringToUtf8(env, system_prompt);
+    const std::string user_str = JStringToUtf8(env, user_prompt);
+    RunGenerateStream(env, handle, system_str, user_str, max_tokens, callback);
 }
 
 } // extern "C"

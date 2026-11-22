@@ -69,7 +69,7 @@ class GraphRagRetriever(
         if (ready.isEmpty()) return RetrievalResult()
         val byId = ready.associateBy { it.id }
 
-        val lexicalRanking = rankLexical(queryStems, lexicalHitIds, byId)
+        val lexicalRanking = rankLexical(question, queryStems, lexicalHitIds, byId)
 
         val graph = EntityGraph.from(ready)
         val seedKeys = graph.matchEntities(queryStems).ifEmpty {
@@ -89,7 +89,7 @@ class GraphRagRetriever(
                 index = idx + 1,
                 memoryId = memoryId,
                 headline = headlineOf(memory),
-                contextText = memory.content.trim().take(MAX_CONTEXT_CHARS),
+                contextText = buildCitationContextText(memory),
                 createdAtMillis = memory.createdAtMillis,
                 lexicalRank = lexicalPos[memoryId],
                 graphHops = graphHops[memoryId],
@@ -107,23 +107,35 @@ class GraphRagRetriever(
     }
 
     private fun rankLexical(
+        question: String,
         queryStems: Set<String>,
         lexicalHitIds: List<String>,
         byId: Map<String, MemoryItem>,
-    ): List<String> =
-        lexicalHitIds.distinct()
+    ): List<String> {
+        val candidateIds = LinkedHashSet<String>()
+        lexicalHitIds.forEach { candidateIds += it }
+        if (QueryTokenizer.containsCjk(question) || lexicalHitIds.isEmpty()) {
+            byId.keys.forEach { candidateIds += it }
+        }
+        return candidateIds
             .mapNotNull { id -> byId[id] }
-            .map { memory ->
+            .mapNotNull { memory ->
                 val docStems = QueryTokenizer.stemmedTokens(
                     "${memory.content} ${memory.summary} ${memory.tags.joinToString(" ")}",
                 )
-                memory to queryStems.count { it in docStems }
+                val overlap = queryStems.count { q -> QueryTokenizer.matchesStemOrTypo(q, docStems) }
+                if (overlap > 0 || memory.id in lexicalHitIds) {
+                    memory to overlap
+                } else {
+                    null
+                }
             }
             .sortedWith(
                 compareByDescending<Pair<MemoryItem, Int>> { it.second }
                     .thenByDescending { it.first.createdAtMillis },
             )
             .map { it.first.id }
+    }
 
     private fun rankGraph(walk: GraphWalk, byId: Map<String, MemoryItem>): List<String> =
         walk.memoryMinHop.keys
@@ -162,6 +174,24 @@ class GraphRagRetriever(
         return merged.values.take(maxTraceEdges)
     }
 
+    private fun buildCitationContextText(memory: MemoryItem): String {
+        val raw = memory.content.trim()
+        val cleanSummary = memory.summary.lineSequence()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .joinToString(" ")
+        val combined = if (
+            cleanSummary.isNotBlank() &&
+            QueryTokenizer.containsCjk(cleanSummary) &&
+            !QueryTokenizer.containsCjk(raw)
+        ) {
+            "$cleanSummary ($raw)"
+        } else {
+            raw
+        }
+        return combined.take(MAX_CONTEXT_CHARS)
+    }
+
     private fun headlineOf(memory: MemoryItem): String {
         val firstLine = memory.summary.lineSequence()
             .map { it.trim().removePrefix("•").trim() }
@@ -195,7 +225,9 @@ class GraphRagRetriever(
         fun entitiesOf(memoryId: String): Set<String> = entitiesByMemory[memoryId].orEmpty()
 
         fun matchEntities(queryStems: Set<String>): Set<String> =
-            entityStems.filter { (_, stems) -> stems.any { it in queryStems } }.keys
+            entityStems.filter { (_, stems) ->
+                queryStems.any { q -> QueryTokenizer.matchesStemOrTypo(q, stems) }
+            }.keys
 
         fun walk(seeds: Set<String>, maxHops: Int): GraphWalk {
             if (seeds.isEmpty()) return GraphWalk(emptyList(), emptyMap())

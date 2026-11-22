@@ -17,8 +17,12 @@ import io.github.cinpecan.engram.edgemnn.EdgeAiEngine
 import io.github.cinpecan.engram.edgemnn.EngineState
 import io.github.cinpecan.engram.edgemnn.UnloadReason
 import java.util.Locale
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -26,6 +30,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
@@ -40,6 +47,7 @@ sealed interface EngineIntent {
     data class ToggleDownload(val model: ModelDescriptorDto) : EngineIntent
     data class LoadModel(val model: ModelDescriptorDto) : EngineIntent
     data object ReleaseMemoryNow : EngineIntent
+    data object DismissNotice : EngineIntent
 }
 
 sealed interface EngineEffect {
@@ -60,6 +68,7 @@ data class ModelCatalogItemUi(
     val isSelected: Boolean,
 )
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class EngineViewModel(
     private val edgeEngine: EdgeAiEngine,
     private val downloadManager: ModelDownloadManager,
@@ -85,6 +94,29 @@ class EngineViewModel(
 
     private val effectChannel = Channel<EngineEffect>(Channel.BUFFERED)
     val effects: Flow<EngineEffect> = effectChannel.receiveAsFlow()
+
+    private val noticeRequests = MutableSharedFlow<String?>(
+        extraBufferCapacity = 1,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
+
+    val transientNotice: StateFlow<String?> = noticeRequests
+        .flatMapLatest { message ->
+            if (message == null) {
+                flowOf<String?>(null)
+            } else {
+                flow {
+                    emit(message)
+                    delay(NOTICE_TIMEOUT_MS)
+                    emit(null)
+                }
+            }
+        }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000L),
+            initialValue = null,
+        )
 
     val inferenceMode: StateFlow<InferenceMode> = preferencesRepository.preferencesFlow
         .map { it.inferenceMode }
@@ -151,6 +183,7 @@ class EngineViewModel(
     fun onIntent(intent: EngineIntent) {
         when (intent) {
             is EngineIntent.SelectMode -> {
+                noticeRequests.tryEmit(null)
                 viewModelScope.launch {
                     preferencesRepository.setInferenceMode(intent.mode)
                 }
@@ -176,7 +209,18 @@ class EngineViewModel(
             is EngineIntent.ToggleDownload -> toggleDownload(intent.model)
             is EngineIntent.LoadModel -> loadModel(intent.model)
             EngineIntent.ReleaseMemoryNow -> releaseMemoryNow()
+            EngineIntent.DismissNotice -> noticeRequests.tryEmit(null)
         }
+    }
+
+    private suspend fun publishNotice(message: String) {
+        noticeRequests.tryEmit(message)
+        effectChannel.send(EngineEffect.ShowMessage(message))
+    }
+
+    private fun tryPublishNotice(message: String) {
+        noticeRequests.tryEmit(message)
+        effectChannel.trySend(EngineEffect.ShowMessage(message))
     }
 
     private fun syncMemories() {
@@ -208,7 +252,7 @@ class EngineViewModel(
                         }
                     },
                 )
-                effectChannel.send(EngineEffect.ShowMessage(msg))
+                publishNotice(msg)
             } finally {
                 isSyncingFlow.value = false
             }
@@ -227,11 +271,11 @@ class EngineViewModel(
     private fun loadModel(model: ModelDescriptorDto) {
         val completed = downloadManager.downloadStates.value[model.id] as? ModelDownloadState.Completed
         if (completed == null) {
-            effectChannel.trySend(EngineEffect.ShowMessage("Download the model first"))
+            tryPublishNotice("Download the model first")
             return
         }
         if (!edgeEngine.isBackendAvailable) {
-            effectChannel.trySend(EngineEffect.ShowMessage("Native inference runtime is not enabled on this build"))
+            tryPublishNotice("Native inference runtime is not enabled on this build")
             return
         }
         viewModelScope.launch {
@@ -242,7 +286,7 @@ class EngineViewModel(
             } else {
                 "Load failed: ${result.exceptionOrNull()?.message}"
             }
-            effectChannel.send(EngineEffect.ShowMessage(msg))
+            publishNotice(msg)
         }
     }
 
@@ -254,11 +298,13 @@ class EngineViewModel(
         viewModelScope.launch {
             val reclaimedBytes = edgeEngine.unload(UnloadReason.USER_REQUESTED)
             val mb = reclaimedBytes / (1024.0 * 1024.0)
-            effectChannel.send(
-                EngineEffect.ShowMessage(
-                    String.format(Locale.US, "Freed %.1f MB of model memory", mb),
-                ),
+            publishNotice(
+                String.format(Locale.US, "Freed %.1f MB of model memory", mb),
             )
         }
+    }
+
+    companion object {
+        const val NOTICE_TIMEOUT_MS: Long = 3_500L
     }
 }

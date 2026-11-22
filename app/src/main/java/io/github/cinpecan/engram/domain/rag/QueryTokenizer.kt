@@ -1,16 +1,27 @@
 package io.github.cinpecan.engram.domain.rag
 
 import java.util.Locale
+import kotlin.math.abs
 
 /**
- * Lightweight English query tokenizer shared by the FTS4 MATCH builder and the graph channel.
+ * Lightweight multilingual query tokenizer shared by the FTS4 MATCH builder, lexical scorer,
+ * and entity graph channel.
  *
- * Normalization mirrors what SQLite's `porter` tokenizer does on the index side closely enough
- * for entity matching: lowercase, alphanumeric split, stopword removal, and light suffix stemming.
+ * For Latin text, normalization mirrors SQLite's `porter` tokenizer (lowercase, alphanumeric
+ * split, stopword removal, and light suffix stemming) with bounded 1-edit typo tolerance. For CJK
+ * text, emits overlapping bigrams because SQLite `porter` does not segment unspaced scripts.
  */
 object QueryTokenizer {
 
     private val SPLIT_REGEX = Regex("[^\\p{L}\\p{N}]+")
+    private val CJK_CHAR_REGEX = Regex("[\u4E00-\u9FFF]")
+    private val CJK_RUN_REGEX = Regex("[\u4E00-\u9FFF]+")
+    private val CJK_QUESTION_PHRASES = Regex(
+        "\u4E3A\u4EC0\u4E48|\u4EC0\u4E48|\u600E\u4E48|\u54EA\u91CC|\u54EA\u513F|\u591A\u5C11",
+    )
+    private val CJK_STOP_PARTICLES = Regex(
+        "[\u8C01\u5417\u5462\u5427\u554A\u5440\u7684\u4E86\u7740\u8FC7\u548C\u4E0E\u8DDF\u628A\u88AB\u5728\u662F\u6709\u8BDD]+",
+    )
 
     private val STOPWORDS: Set<String> = setOf(
         "a", "about", "after", "again", "all", "am", "an", "and", "any", "are", "as", "at",
@@ -23,15 +34,82 @@ object QueryTokenizer {
         "whom", "why", "will", "with", "would", "you", "your", "tell", "know", "need",
     )
 
-    /** Lowercased, stopword-free tokens of at least two characters, in first-seen order. */
-    fun tokenize(text: String): List<String> =
-        text.lowercase(Locale.US)
-            .split(SPLIT_REGEX)
+    fun containsCjk(text: String): Boolean = CJK_CHAR_REGEX.containsMatchIn(text)
+
+    /** Lowercased, stopword-free tokens (including CJK 2-grams when present), in first-seen order. */
+    fun tokenize(text: String): List<String> {
+        if (!containsCjk(text)) {
+            return text.lowercase(Locale.US)
+                .split(SPLIT_REGEX)
+                .filter { it.length >= 2 && it !in STOPWORDS }
+                .distinct()
+        }
+
+        val tokens = LinkedHashSet<String>()
+        val nonCjk = CJK_RUN_REGEX.replace(text.lowercase(Locale.US), " ")
+        nonCjk.split(SPLIT_REGEX)
             .filter { it.length >= 2 && it !in STOPWORDS }
-            .distinct()
+            .forEach { tokens += it }
+
+        addCjkBigrams(text, tokens)
+        return tokens.toList()
+    }
+
+    private fun addCjkBigrams(source: String, sink: MutableSet<String>) {
+        val cleaned = CJK_STOP_PARTICLES.replace(
+            CJK_QUESTION_PHRASES.replace(source, " "),
+            " ",
+        )
+        for (match in CJK_RUN_REGEX.findAll(cleaned)) {
+            val run = match.value
+            if (run.length < 2) continue
+            if (run.length == 2) {
+                sink += run
+            } else {
+                for (i in 0 until run.length - 1) {
+                    sink += run.substring(i, i + 2)
+                }
+            }
+        }
+    }
 
     /** Stemmed variant used for set comparisons between query and entity names / memory text. */
     fun stemmedTokens(text: String): Set<String> = tokenize(text).mapTo(LinkedHashSet()) { stem(it) }
+
+    /** Returns true for pure ASCII letter stems (length >= 5, shared initial) within Damerau-Levenshtein <= 1. */
+    fun isWithinOneTypo(a: String, b: String): Boolean {
+        if (a == b) return true
+        val la = a.length
+        val lb = b.length
+        if (la < 5 || lb < 5 || abs(la - lb) > 1 || a[0] != b[0]) return false
+        for (i in 0 until la) {
+            if (a[i] !in 'a'..'z') return false
+        }
+        for (i in 0 until lb) {
+            if (b[i] !in 'a'..'z') return false
+        }
+
+        if (la == lb) {
+            var i = 0
+            while (i < la && a[i] == b[i]) i++
+            if (i == la) return true
+            if (a.regionMatches(i + 1, b, i + 1, la - i - 1)) return true
+            return i + 1 < la &&
+                a[i] == b[i + 1] &&
+                a[i + 1] == b[i] &&
+                a.regionMatches(i + 2, b, i + 2, la - i - 2)
+        }
+
+        val shorter = if (la < lb) a else b
+        val longer = if (la < lb) b else a
+        var i = 0
+        while (i < shorter.length && shorter[i] == longer[i]) i++
+        if (i == shorter.length) return true
+        return shorter.regionMatches(i, longer, i + 1, shorter.length - i)
+    }
+
+    fun matchesStemOrTypo(queryStem: String, candidateStems: Set<String>): Boolean =
+        queryStem in candidateStems || candidateStems.any { isWithinOneTypo(queryStem, it) }
 
     /**
      * Minimal Porter-style suffix stripping (step 1 subset). Deliberately conservative: it only

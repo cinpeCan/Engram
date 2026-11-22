@@ -22,10 +22,15 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
 import okhttp3.OkHttpClient
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -33,8 +38,10 @@ import org.junit.Test
 @OptIn(ExperimentalCoroutinesApi::class)
 class RawMemoryViewModelTest {
 
+    private val testDispatcher = StandardTestDispatcher()
+
     @get:Rule
-    val mainDispatcherRule = MainDispatcherRule()
+    val mainDispatcherRule = MainDispatcherRule(testDispatcher)
 
     private class FakeStore(initial: List<MemoryItem>) : LocalMemoryStore {
         private val items = MutableStateFlow(initial)
@@ -69,7 +76,7 @@ class RawMemoryViewModelTest {
     }
 
     @Test
-    fun observesRequestedMemoryAndHandlesMissingId() = runTest {
+    fun observesRequestedMemoryAndHandlesMissingId() = runTest(testDispatcher) {
         val m1 = MemoryItem(
             id = "m1",
             content = "This is the unprocessed source text, which may be long and contain credentials.",
@@ -96,5 +103,19 @@ class RawMemoryViewModelTest {
             vmMissing.uiState.first { it !is RawMemoryUiState.Loading }
         }
         assertTrue(missing is RawMemoryUiState.NotFound)
+
+        // Copying source flips isCopied -> true and resets automatically after COPY_CONFIRM_MS
+        val copyCollector = backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) {
+            vmReady.isCopied.collect {}
+        }
+        runCurrent()
+        assertFalse(vmReady.isCopied.value)
+        vmReady.onIntent(RawMemoryIntent.OnSourceCopied)
+        runCurrent()
+        assertTrue(vmReady.isCopied.value)
+        advanceTimeBy(RawMemoryViewModel.COPY_CONFIRM_MS + 100L)
+        runCurrent()
+        assertFalse(vmReady.isCopied.value)
+        copyCollector.cancel()
     }
 }

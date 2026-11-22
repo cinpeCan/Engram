@@ -108,14 +108,16 @@ class EngineViewModelTest {
     }
 
     @Test
-    fun syncConfigSavesPreferencesLoadRejectsUnreadyAndReleasesMemory() = runTest {
+    fun syncConfigSavesPreferencesLoadRejectsUnreadyAndReleasesMemory() = runTest(mainDispatcherRule.dispatcher) {
         val dataStore = PreferenceDataStoreFactory.create(
             scope = CoroutineScope(backgroundScope.coroutineContext + Dispatchers.IO),
             produceFile = { tempFolder.newFile("engine_prefs.preferences_pb") },
         )
         val prefsRepo = EnginePreferencesRepository(dataStore)
         val modelsRoot = tempFolder.newFolder("models")
-        val okHttp = OkHttpClient()
+        val okHttp = OkHttpClient.Builder()
+            .addInterceptor { throw java.net.ConnectException("Simulated connection refused") }
+            .build()
         val baseModel = ModelDownloadManager.builtInCatalog().single()
         val testCatalogModel = baseModel.copy(
             files = baseModel.files.map { it.copy(sha256 = null) },
@@ -201,7 +203,7 @@ class EngineViewModelTest {
     }
 
     @Test
-    fun defaultsAreEmptyAnd401And429SyncNoticesDoNotLeakHosts() = runTest {
+    fun defaultsAreEmptyAnd401And429SyncNoticesDoNotLeakHosts() = runTest(mainDispatcherRule.dispatcher) {
         val dataStore = PreferenceDataStoreFactory.create(
             scope = CoroutineScope(backgroundScope.coroutineContext + Dispatchers.IO),
             produceFile = { tempFolder.newFile("engine_auth_prefs.preferences_pb") },

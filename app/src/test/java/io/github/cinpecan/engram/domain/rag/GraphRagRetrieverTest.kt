@@ -1,7 +1,10 @@
 package io.github.cinpecan.engram.domain.rag
 
 import io.github.cinpecan.engram.data.seed.SeedStorylineProvider
+import io.github.cinpecan.engram.domain.model.AnalysisSource
 import io.github.cinpecan.engram.domain.model.MemoryAnalysisStatus
+import io.github.cinpecan.engram.domain.model.MemoryItem
+import io.github.cinpecan.engram.domain.model.RelationTriple
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -76,5 +79,39 @@ class GraphRagRetrieverTest {
     fun pendingMemoriesAreNeverCited() {
         val pending = seeds.map { it.copy(analysisStatus = MemoryAnalysisStatus.PENDING) }
         assertTrue(retriever.retrieve("Helios Display", pending, pending.map { it.id }).isEmpty)
+    }
+
+    @Test
+    fun retrievesCjkTypoNotesAndLatinOneEditTyposWithoutFtsHits() {
+        val cjkMemory = MemoryItem(
+            id = "cjk-1",
+            content = "\u59293\u51B7\u4E0D\u51B7\uFF0C\u51B7\u7684\u8BDD\u627E\u55B5\u55B5\uFF0C\u6C6A\u6C6A\u73A9",
+            summary = "\u5929\u51B7\u65F6\u627E\u55B5\u55B5\u3001\u6C6A\u6C6A\u4E00\u8D77\u73A9",
+            tags = listOf("\u5929\u6C14", "\u6237\u5916\u6D3B\u52A8"),
+            createdAtMillis = 1_800_000_010_000L,
+            analysisStatus = MemoryAnalysisStatus.READY,
+            calendarProposal = null,
+            calendarSaved = false,
+            relations = listOf(
+                RelationTriple(
+                    id = "cjk-1_r0",
+                    memoryId = "cjk-1",
+                    source = "\u55B5\u55B5",
+                    target = "\u6C6A\u6C6A",
+                    relation = "\u4E00\u8D77\u73A9",
+                    bidirectional = true,
+                ),
+            ),
+            analysisSource = AnalysisSource.MNN_EDGE,
+        )
+        val allMemories = seeds + cjkMemory
+
+        val cjkResult = retriever.retrieve("\u5929\u51B7\u627E\u8C01\u73A9\uFF1F", allMemories, emptyList())
+        assertEquals(listOf("cjk-1"), cjkResult.citations.map { it.memoryId })
+        assertEquals(1, cjkResult.traceEdges.size)
+
+        val typoResult = retriever.retrieve("What is happening with Helois Display?", allMemories, emptyList())
+        assertTrue(typoResult.citations.any { it.memoryId == "seed-1" })
+        assertTrue(typoResult.citations.any { it.memoryId == "seed-2" })
     }
 }

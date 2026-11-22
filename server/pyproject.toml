@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "engram-gateway"
-version = "0.1.0"
-description = "Lightweight FastAPI gateway for Engram on-device model manifest and cloud SSE fallback"
+version = "0.1.1"
+description = "FastAPI gateway for Engram cloud SSE distillation, cited GraphRAG answers, Bearer quota enforcement, and multi-device LWW sync"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115.0",

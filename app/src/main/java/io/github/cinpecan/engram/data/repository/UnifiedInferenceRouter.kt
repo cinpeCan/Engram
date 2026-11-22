@@ -55,10 +55,11 @@ class UnifiedInferenceRouter(
         mode: InferenceMode,
         serverBaseUrl: String,
         authToken: String? = null,
+        skipCloudAttempt: Boolean = false,
     ): Flow<DistillationEvent> = flow {
         var cloudFailure: Throwable? = null
 
-        if (mode == InferenceMode.CLOUD_COLLAB) {
+        if (mode == InferenceMode.CLOUD_COLLAB && !skipCloudAttempt) {
             when (
                 val cloudResult = tryCloudStream(
                     content = content,
@@ -78,7 +79,7 @@ class UnifiedInferenceRouter(
             }
         }
 
-        val degradedFromCloud = cloudFailure != null
+        val degradedFromCloud = cloudFailure != null || (mode == InferenceMode.CLOUD_COLLAB && skipCloudAttempt)
         if (edgeEngine.state.value is EngineState.Ready || edgeEngine.isBackendAvailable) {
             val edgeCompleted = tryEdgeStream(
                 content = content,
@@ -94,7 +95,11 @@ class UnifiedInferenceRouter(
 
         val fallbackPayload = analyzer.fallbackAnalyze(content, nowMillis)
         val fallbackBadge = when (val failure = cloudFailure) {
-            null -> ""
+            null -> if (mode == InferenceMode.CLOUD_COLLAB && skipCloudAttempt) {
+                BADGE_FALLBACK_OFFLINE
+            } else {
+                ""
+            }
             is CloudGatewayHttpException -> when (failure.statusCode) {
                 401 -> BADGE_FALLBACK_UNAUTHORIZED
                 429 -> BADGE_FALLBACK_QUOTA
@@ -182,14 +187,18 @@ class UnifiedInferenceRouter(
         degradedFromCloud: Boolean,
         onPreview: suspend (DistillationEvent.StreamingPreview) -> Unit,
     ): DistillationEvent.Completed? = try {
-        val prompt = analyzer.buildAnalysisPrompt(content, nowMillis)
+        val userPrompt = analyzer.buildEdgeAnalysisUserPrompt(content, nowMillis)
         val previewer = SummaryPreviewTracker(STAGE_EDGE_STREAMING)
 
         val builder = StringBuilder()
         var finalText = ""
         var finalTelemetry: InferenceTelemetry? = null
 
-        edgeEngine.streamGenerate(prompt, maxTokens = 320).collect { chunk ->
+        edgeEngine.streamGenerate(
+            systemPrompt = "",
+            userPrompt = userPrompt,
+            maxTokens = 384,
+        ).collect { chunk ->
             when (chunk) {
                 is StreamChunk.Delta -> {
                     builder.append(chunk.text)
@@ -202,8 +211,22 @@ class UnifiedInferenceRouter(
             }
         }
 
-        val telemetry = finalTelemetry?.takeIf { it.isRealMnn } ?: return null
-        val merged = analyzer.mergeModelJsonOrNull(finalText, content, nowMillis) ?: return null
+        val telemetry = finalTelemetry?.takeIf { it.isRealMnn }
+        if (telemetry == null) {
+            runCatching { android.util.Log.w(TAG, "Edge telemetry missing or not real MNN; falling back") }
+            return null
+        }
+        val merged = analyzer.mergeModelJsonOrNull(finalText, content, nowMillis)
+        if (merged == null) {
+            val reason = analyzer.diagnoseParseFailure(finalText)
+            runCatching {
+                android.util.Log.w(
+                    TAG,
+                    "Edge JSON parse failed (chars=${finalText.length}, tokens=${telemetry.generatedTokens}, reason=$reason); falling back",
+                )
+            }
+            return null
+        }
 
         val modelLabel = humanizeEdgeModelName(telemetry.modelId)
         val badge = if (degradedFromCloud) {
@@ -232,7 +255,8 @@ class UnifiedInferenceRouter(
         )
     } catch (e: CancellationException) {
         throw e
-    } catch (_: Throwable) {
+    } catch (t: Throwable) {
+        runCatching { android.util.Log.w(TAG, "Edge stream failed (${t::class.simpleName}): ${t.message}") }
         null
     }
 
@@ -246,7 +270,7 @@ class UnifiedInferenceRouter(
 
         fun next(rawSoFar: CharSequence): DistillationEvent.StreamingPreview? {
             val partial = PartialJsonSummaryExtractor.extract(rawSoFar.toString())
-            val text = partial?.text.orEmpty()
+            val text = MemoryAnalyzer.cleanStreamingPreviewText(partial?.text.orEmpty())
             val stage = if (partial?.isClosed == true) STAGE_MAPPING_RELATIONS else streamingStage
             if (text == lastText && stage == lastStage) return null
             lastText = text
@@ -256,6 +280,8 @@ class UnifiedInferenceRouter(
     }
 
     companion object {
+        private const val TAG = "EngramInferenceRouter"
+
         const val STAGE_PREPARING = "Preparing…"
         const val STAGE_CLOUD_STREAMING = "Streaming from cloud…"
         const val STAGE_EDGE_STREAMING = "Distilling on-device…"

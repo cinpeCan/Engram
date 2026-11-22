@@ -47,21 +47,23 @@ _ANALYSIS_SYSTEM_PROMPT = (
     "You are Engram's white-box memory distiller. "
     "Turn the user's raw note into ONE JSON object that strictly matches this shape. "
     "Output JSON only: no Markdown, no code fences, no explanations.\n"
-    '{"summary":"• point one\\n• point two",'
-    '"tags":["tag"],'
-    '"calendarProposal":{"title":"Event title","startTimeIso":"YYYY-MM-DDTHH:MM:SS","durationMinutes":60,"location":null},'
-    '"relations":[{"source":"Entity A","target":"Entity B","relation":"label","bidirectional":false}]}\n'
+    '{"summary":"• ...","tags":[],"calendarProposal":null,'
+    '"relations":[{"source":"","target":"","relation":"","bidirectional":false}]}\n'
     "Rules:\n"
     '- summary: 1-3 bullets, each starting with "• " and separated by \\n; each bullet a short '
-    "subject-verb-object phrase of at most ~12 words. Never reveal plaintext passwords, PINs or "
-    'secrets; write "see source" instead.\n'
+    "subject-verb-object phrase of at most ~12 words. Capture clear intent smoothly across minor input typos "
+    "while keeping real entity names intact. Never chat, answer questions, or compute arithmetic. Never reveal plaintext "
+    'passwords, PINs or secrets; write "see source" instead.\n'
     "- tags: at most 3 short scene tags (each <= 24 characters), or [] when none fit.\n"
     "- calendarProposal: null unless the note states a concrete schedule. Convert relative times "
     "(e.g. tomorrow 3pm) into an exact ISO local datetime based on the provided current local time. "
     "durationMinutes between 5 and 480.\n"
-    "- relations: at most 15 entity triples; source and target must differ (no self-loops); "
+    "- relations: at most 15 grounded entity triples; source and target must differ ([] when < 2 entities); "
     "entity names <= 32 characters, relation labels <= 24 characters.\n"
-    "- Write the summary, tags and relation labels in the same language as the note."
+    "- Write the summary, tags, calendar title and relation labels in the same language as the note.\n"
+    "- If the note is written in romanized Mandarin Pinyin (e.g. 'wo yao chi niurou, xiang yao he ww, yy yi qi wan'), "
+    "restore clear Pinyin words into natural Simplified Chinese ('he A, B yi qi' means 'with A and B together'; "
+    "never invent unmentioned drinks or items), while keeping 2-3 letter abbreviations (such as ww, yy) verbatim without guessing full names."
 )
 
 _ANSWER_SYSTEM_PROMPT = (

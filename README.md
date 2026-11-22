@@ -16,12 +16,12 @@
 ### Capture → distill, streamed like a typewriter
 - One single-screen Material 3 Expressive workspace: a titleless timeline and one symmetrical composer. No tabs, no mode switches.
 - A note is distilled by the cloud gateway (Gemini via Vertex AI, SSE), or on-device by MNN when offline. While the model is still emitting JSON, an incremental parser (`PartialJsonSummaryExtractor`) extracts the `summary` field and types it out as real bullets. Raw JSON never reaches the UI.
-- Every card shows the engine that actually produced it (`Gemini 3.5 Flash-Lite · TTFT 899ms · 103.9 tok/s`, `Qwen2.5 0.5B · MNN · …`, `Cloud fallback · …`). Nothing is faked: without a model or token the card says so and uses deterministic local extraction.
+- Every card shows the engine that actually produced it (`Gemini 3.5 Flash-Lite · TTFT 899ms · 103.9 tok/s`, `Qwen2.5 0.5B · MNN · …`, `Cloud fallback · …`). Nothing is faked: unready offline models are gated before send, while unauthenticated or offline cloud runs without an on-device model state the reason and use deterministic local extraction.
 
 ### Ask your memories — on-device GraphRAG with zero extra UI
-- End a note with **`?`** and the send arrow morphs into a sparkle. The question is answered, never saved.
+- End a note with **`?`** (or **`？`**) and the send arrow morphs into a sparkle. The question is answered, never saved.
 - **Retrieval** fuses two orthogonal channels with **Reciprocal Rank Fusion**:
-  - **Lexical:** Room **FTS4 with SQLite's `porter` stemmer** (`quoting` matches `quoted`), as an external-content index kept in sync by Room triggers.
+  - **Lexical:** Room **FTS4 with SQLite's `porter` stemmer** (`quoting` matches `quoted`) as an external-content index kept in sync by Room triggers, paired with CJK 2-gram segmentation and bounded 1-edit typo fallback.
   - **Graph:** entities named in the question seed a **2-hop breadth-first walk** over the entity graph built from every memory's relation triples. It surfaces notes that never contain the query words: ask about *Helios Display* and the finance blocker in another note is found through `Helios Display — Micro-OLED Module — Liam Chen`.
 - **Answer sheet:** a cited answer streams in, with `[n]` rendered as tappable chips that open the source. Below it are source chips (*Keyword match · 2-hop link*) and an inline **Reasoning Graph**: the walked cross-memory subgraph on a live Deponder physics canvas, with question entities highlighted.
 - **Honest fallback chain:** cloud → on-device MNN → retrieval-only (*"No model loaded · Showing matched memories"*). It never fabricates an answer.

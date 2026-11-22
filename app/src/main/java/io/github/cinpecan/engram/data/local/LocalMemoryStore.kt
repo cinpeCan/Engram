@@ -24,7 +24,6 @@ interface LocalMemoryStore {
     suspend fun countMemories(): Int
 
     suspend fun deleteMemory(memoryId: String, deletedAtMillis: Long = System.currentTimeMillis()) = Unit
-    suspend fun restoreMemory(item: MemoryItem) = Unit
     suspend fun getDeletedTombstones(): Map<String, Long> = emptyMap()
 
     /**

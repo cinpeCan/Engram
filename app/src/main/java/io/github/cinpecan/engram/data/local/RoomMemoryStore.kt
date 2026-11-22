@@ -138,22 +138,6 @@ class RoomMemoryStore(
         }
     }
 
-    override suspend fun restoreMemory(item: MemoryItem) {
-        withContext(Dispatchers.IO) {
-            db.withTransaction {
-                dao.clearDeletedTombstone(item.id)
-                dao.upsertMemory(item.toEntity())
-                val normalizedRelations = item.relations.mapIndexed { idx, rel ->
-                    rel.copy(
-                        id = rel.id.ifBlank { "${item.id}_r$idx" },
-                        memoryId = item.id,
-                    )
-                }
-                replaceRelations(item.id, normalizedRelations)
-            }
-        }
-    }
-
     override suspend fun getDeletedTombstones(): Map<String, Long> = withContext(Dispatchers.IO) {
         dao.getAllDeletedTombstones().associate { it.id to it.deletedAtMillis }
     }

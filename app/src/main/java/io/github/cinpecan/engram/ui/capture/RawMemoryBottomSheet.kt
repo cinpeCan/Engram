@@ -17,6 +17,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -26,14 +27,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.cinpecan.engram.ui.components.ExpressivePillSurface
-import io.github.cinpecan.engram.ui.navigation.EngramNavigator
-import io.github.cinpecan.engram.ui.navigation.LocalEngramNavigator
+import io.github.cinpecan.engram.ui.theme.transparentize
+import io.github.cinpecan.engram.ui.viewmodel.RawMemoryIntent
 import io.github.cinpecan.engram.ui.viewmodel.RawMemoryUiState
 import io.github.cinpecan.engram.ui.viewmodel.RawMemoryViewModel
 import java.text.SimpleDateFormat
@@ -47,12 +47,13 @@ fun RawMemoryRoute(
     memoryId: String,
     modifier: Modifier = Modifier,
     viewModel: RawMemoryViewModel = koinViewModel(key = memoryId) { parametersOf(memoryId) },
-    navigator: EngramNavigator = LocalEngramNavigator.current,
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val isCopied by viewModel.isCopied.collectAsStateWithLifecycle()
     RawMemorySheetContent(
         uiState = uiState,
-        onCopied = { navigator.showMessage("Source copied to clipboard") },
+        isCopied = isCopied,
+        onIntent = viewModel::onIntent,
         modifier = modifier,
     )
 }
@@ -60,7 +61,8 @@ fun RawMemoryRoute(
 @Composable
 fun RawMemorySheetContent(
     uiState: RawMemoryUiState,
-    onCopied: () -> Unit,
+    isCopied: Boolean = false,
+    onIntent: (RawMemoryIntent) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -120,18 +122,26 @@ fun RawMemorySheetContent(
                         onClick = {
                             val clipboard = context.getSystemService(ClipboardManager::class.java)
                             clipboard?.setPrimaryClip(ClipData.newPlainText("engram_raw", memory.content))
-                            onCopied()
+                            onIntent(RawMemoryIntent.OnSourceCopied)
                         },
                         modifier = Modifier.size(36.dp),
                         restCorner = 18.dp,
                         pressedCorner = 10.dp,
-                        containerColor = Color.Transparent,
+                        containerColor = if (isCopied) {
+                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f)
+                        } else {
+                            MaterialTheme.colorScheme.surfaceVariant.transparentize()
+                        },
                         pressedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                        contentDescription = "Copy source",
+                        contentColor = if (isCopied) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        contentDescription = if (isCopied) "Source copied" else "Copy source",
                     ) {
                         Icon(
-                            imageVector = Icons.Rounded.ContentCopy,
+                            imageVector = if (isCopied) Icons.Rounded.Check else Icons.Rounded.ContentCopy,
                             contentDescription = null,
                             modifier = Modifier.size(19.dp),
                         )

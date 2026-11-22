@@ -7,6 +7,8 @@ import io.github.cinpecan.engram.data.remote.AnswerContextDto
 import io.github.cinpecan.engram.data.remote.AnswerStreamRequestDto
 import io.github.cinpecan.engram.data.remote.CloudGatewayHttpException
 import io.github.cinpecan.engram.data.remote.CloudSseClient
+import io.github.cinpecan.engram.domain.analyzer.EdgePromptTemplates
+import io.github.cinpecan.engram.domain.analyzer.MemoryAnalyzer
 import io.github.cinpecan.engram.domain.model.InferenceMode
 import io.github.cinpecan.engram.domain.rag.Citation
 import io.github.cinpecan.engram.domain.rag.GraphRagRetriever
@@ -59,6 +61,7 @@ class AnswerRepository(
     private val retriever: GraphRagRetriever = GraphRagRetriever(),
     private val zoneId: ZoneId = ZoneId.systemDefault(),
     private val nowMillis: () -> Long = System::currentTimeMillis,
+    private val analyzer: MemoryAnalyzer = MemoryAnalyzer(zoneId = zoneId),
 ) {
 
     fun ask(question: String): Flow<AnswerEvent> = flow {
@@ -78,24 +81,42 @@ class AnswerRepository(
 
         var cloudFailure: Throwable? = null
         if (mode == InferenceMode.CLOUD_COLLAB) {
-            try {
-                val completed = streamFromCloud(
-                    question = trimmed,
-                    citations = retrieval.citations,
-                    serverBaseUrl = prefs?.serverBaseUrl.orEmpty(),
-                    authToken = prefs?.syncKey,
-                )
-                cloudSessionMonitor?.retryVerification()
-                emit(completed)
-                return@flow
-            } catch (e: CancellationException) {
-                throw e
-            } catch (t: Throwable) {
-                cloudFailure = t
-                if (t is CloudGatewayHttpException && (t.statusCode == 401 || t.statusCode == 429)) {
-                    cloudSessionMonitor?.retryVerification()
-                }
+            val monitorState = cloudSessionMonitor?.state?.value
+            val passesFilter = prefs != null &&
+                CloudSessionMonitor.passesLengthFilter(prefs.serverBaseUrl, prefs.syncKey)
+            val preKnownFailure: Throwable? = when {
+                cloudSessionMonitor == null -> null
+                monitorState is CloudSessionState.InvalidToken ->
+                    CloudGatewayHttpException(401)
+                monitorState is CloudSessionState.QuotaExhausted ->
+                    CloudGatewayHttpException(429)
+                monitorState is CloudSessionState.IdleUnconfigured && !passesFilter ->
+                    CloudGatewayHttpException(401)
+                else -> null
+            }
+            if (preKnownFailure != null) {
+                cloudFailure = preKnownFailure
                 emit(AnswerEvent.Streaming(textSoFar = "", stage = STAGE_EDGE))
+            } else {
+                try {
+                    val completed = streamFromCloud(
+                        question = trimmed,
+                        citations = retrieval.citations,
+                        serverBaseUrl = prefs?.serverBaseUrl.orEmpty(),
+                        authToken = prefs?.syncKey,
+                    )
+                    cloudSessionMonitor?.retryVerification()
+                    emit(completed)
+                    return@flow
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (t: Throwable) {
+                    cloudFailure = t
+                    if (t is CloudGatewayHttpException && (t.statusCode == 401 || t.statusCode == 429)) {
+                        cloudSessionMonitor?.retryVerification()
+                    }
+                    emit(AnswerEvent.Streaming(textSoFar = "", stage = STAGE_EDGE))
+                }
             }
         }
 
@@ -146,10 +167,10 @@ class AnswerRepository(
                 }
                 chunkCount++
                 builder.append(chunk.delta)
-                emit(AnswerEvent.Streaming(textSoFar = builder.toString(), stage = STAGE_CLOUD))
+                emit(AnswerEvent.Streaming(textSoFar = analyzer.redactSensitiveDetails(builder.toString()), stage = STAGE_CLOUD))
             }
         }
-        val text = builder.toString().trim()
+        val text = analyzer.redactSensitiveDetails(builder.toString().trim())
         if (text.isEmpty()) error("Empty cloud answer")
         val totalMs = ((System.nanoTime() - startNs) / 1_000_000L).coerceAtLeast(lastLatencyMs)
         val estimatedTokens = (text.length / 2).coerceAtLeast(chunkCount).coerceAtLeast(1)
@@ -170,16 +191,30 @@ class AnswerRepository(
         citations: List<Citation>,
         degraded: Boolean,
     ): AnswerEvent.Completed? = try {
-        val prompt = buildEdgePrompt(question, citations, nowIsoWithOffset())
+        val nowIso = nowIsoWithOffset()
+        val combinedUserPrompt = if (EdgePromptTemplates.isChineseIntent(question)) {
+            buildCjkEdgePrompt(question, citations, nowIso)
+        } else {
+            "${buildEdgeSystemPrompt(nowIso)}\n\n${buildEdgeUserPrompt(question, citations)}"
+        }
         val builder = StringBuilder()
         var finalText = ""
         var telemetry: InferenceTelemetry? = null
         emit(AnswerEvent.Streaming(textSoFar = "", stage = STAGE_EDGE))
-        edgeEngine.streamGenerate(prompt, maxTokens = EDGE_MAX_TOKENS).collect { chunk ->
+        edgeEngine.streamGenerate(
+            systemPrompt = "",
+            userPrompt = combinedUserPrompt,
+            maxTokens = EDGE_MAX_TOKENS,
+        ).collect { chunk ->
             when (chunk) {
                 is StreamChunk.Delta -> {
                     builder.append(chunk.text)
-                    emit(AnswerEvent.Streaming(textSoFar = builder.toString(), stage = STAGE_EDGE))
+                    emit(
+                        AnswerEvent.Streaming(
+                            textSoFar = analyzer.redactSensitiveDetails(builder.toString()),
+                            stage = STAGE_EDGE,
+                        ),
+                    )
                 }
                 is StreamChunk.Completed -> {
                     finalText = chunk.fullText.ifEmpty { builder.toString() }
@@ -188,7 +223,7 @@ class AnswerRepository(
             }
         }
         val realTelemetry = telemetry?.takeIf { it.isRealMnn }
-        val text = finalText.trim()
+        val text = analyzer.redactSensitiveDetails(finalText.trim())
         if (realTelemetry == null || text.isEmpty()) {
             null
         } else {
@@ -224,29 +259,45 @@ class AnswerRepository(
             .truncatedTo(ChronoUnit.SECONDS)
             .format(DateTimeFormatter.ISO_OFFSET_DATE_TIME)
 
-    private fun buildEdgePrompt(question: String, citations: List<Citation>, nowIso: String): String {
+    private fun buildEdgeSystemPrompt(nowIso: String): String = """
+        You are Engram, a private memory assistant. Current local time: $nowIso.
+        Answer the user's question using ONLY the numbered memory snippets provided.
+        Always cite snippet numbers inline at the end of sentences, e.g. [1] or [2].
+        If the snippets do not contain the answer, say so briefly and do not invent facts.
+        Be concise: at most 4 sentences. Never reveal passwords or secrets.
+        Answer in the same language as the question.
+    """.trimIndent()
+
+    private fun buildEdgeUserPrompt(question: String, citations: List<Citation>): String {
+        val snippets = formatSnippets(citations)
+        return """
+            Memory snippets:
+            $snippets
+
+            Question: $question
+        """.trimIndent()
+    }
+
+    private fun buildCjkEdgePrompt(
+        question: String,
+        citations: List<Citation>,
+        nowIso: String,
+    ): String {
+        val snippets = formatSnippets(citations)
+        return "\u4F60\u662F\u5370\u8FF9\uFF08Engram\uFF09\u79C1\u5BC6\u8BB0\u5FC6\u52A9\u624B\u3002\u5F53\u524D\u65F6\u95F4\uFF1A$nowIso\u3002\n" +
+            "\u8BF7\u4EC5\u6839\u636E\u4E0B\u65B9\u7F16\u53F7\u8BB0\u5FC6\u7247\u6BB5\u7528\u4E2D\u6587\u7B80\u6D01\u4F5C\u7B54\uFF0C\u5728\u53E5\u672B\u7528 [1]\u3001[2] \u6807\u6CE8\u5F15\u7528\u7F16\u53F7\uFF1B\u82E5\u7247\u6BB5\u672A\u63D0\u53CA\u8BF7\u76F4\u63A5\u8BF4\u660E\uFF0C\u4E25\u7981\u7F16\u9020\u4E8B\u5B9E\u6216\u6CC4\u9732\u660E\u6587\u5BC6\u7801\uFF08\u4E0D\u8D85\u8FC73\u53E5\u8BDD\uFF09\u3002\n\n" +
+            "\u8BB0\u5FC6\u7247\u6BB5\uFF1A\n$snippets\n\n\u95EE\u9898\uFF1A$question"
+    }
+
+    private fun formatSnippets(citations: List<Citation>): String {
         val dateFormatter = DateTimeFormatter.ISO_LOCAL_DATE
-        val snippets = citations.joinToString("\n") { citation ->
+        return citations.joinToString("\n") { citation ->
             val date = Instant.ofEpochMilli(citation.createdAtMillis).atZone(zoneId).toLocalDate().format(dateFormatter)
             val text = citation.contextText.ifBlank { citation.headline }
                 .replace(Regex("\\s+"), " ")
                 .take(EDGE_SNIPPET_CHARS)
             "[${citation.index}] ($date) $text"
         }
-        return """
-            You are Engram, a private memory assistant. Current local time: $nowIso.
-            Answer the question using ONLY the numbered memory snippets below.
-            Cite sources inline as [1], [2] matching the snippet numbers.
-            If the snippets do not contain the answer, say so briefly and do not invent facts.
-            Be concise: at most 4 sentences. Never reveal passwords or secrets.
-            Answer in the same language as the question.
-
-            Memory snippets:
-            $snippets
-
-            Question: $question
-            Answer:
-        """.trimIndent()
     }
 
     private fun retrievalOnlyReason(cloudFailure: Throwable?, mode: InferenceMode): String =

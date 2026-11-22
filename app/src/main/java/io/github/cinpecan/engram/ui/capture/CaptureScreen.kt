@@ -38,6 +38,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
@@ -64,8 +65,10 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
@@ -107,11 +110,14 @@ import io.github.cinpecan.engram.ui.navigation.LocalWorkspaceContentPadding
 import io.github.cinpecan.engram.ui.theme.transparentize
 import io.github.cinpecan.engram.ui.viewmodel.CaptureEffect
 import io.github.cinpecan.engram.ui.viewmodel.CaptureIntent
+import io.github.cinpecan.engram.ui.viewmodel.CaptureUiState
 import io.github.cinpecan.engram.ui.viewmodel.CaptureViewModel
 import io.github.cinpecan.engram.ui.viewmodel.isAskQuery
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
 import org.koin.compose.viewmodel.koinViewModel
 
 @Composable
@@ -120,12 +126,10 @@ fun CaptureRoute(
     viewModel: CaptureViewModel = koinViewModel(),
     navigator: EngramNavigator = LocalEngramNavigator.current,
 ) {
-    val memories by viewModel.memories.collectAsStateWithLifecycle()
-    val streamingPreviews by viewModel.streamingPreviews.collectAsStateWithLifecycle()
-    val inputText by viewModel.inputText.collectAsStateWithLifecycle()
-    val isSubmitting by viewModel.isSubmitting.collectAsStateWithLifecycle()
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
     var pendingInsert by remember { mutableStateOf<CaptureEffect.OpenCalendarInsert?>(null) }
+    var pendingScrollMemoryId by remember { mutableStateOf<String?>(null) }
 
     val calendarPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission(),
@@ -193,24 +197,31 @@ fun CaptureRoute(
                     )
                 }
                 is CaptureEffect.ShowMessage -> navigator.showMessage(effect.message)
-                is CaptureEffect.ShowUndoDelete -> navigator.showActionMessage(
-                    message = effect.message,
-                    actionLabel = "Undo",
-                    onAction = { viewModel.onIntent(CaptureIntent.UndoDeleteMemory) },
-                )
+                is CaptureEffect.ShowEngineNotice -> {
+                    val action = effect.actionLabel
+                    if (action != null) {
+                        navigator.showEngineSetupNotice(
+                            message = effect.message,
+                            actionLabel = action,
+                        )
+                    } else {
+                        navigator.showMessage(effect.message)
+                    }
+                }
+                CaptureEffect.DismissNotice -> navigator.dismissNotice()
+                is CaptureEffect.ScrollToTop -> pendingScrollMemoryId = effect.memoryId
                 is CaptureEffect.OpenAnswer -> navigator.openAnswer(effect.question)
             }
         }
     }
 
     CaptureScreen(
-        memories = memories,
-        streamingPreviews = streamingPreviews,
-        inputText = inputText,
-        isSubmitting = isSubmitting,
+        uiState = uiState,
         onIntent = viewModel::onIntent,
         onOpenGraph = navigator::openGraphForMemory,
         onOpenRawMemory = navigator::openRawMemory,
+        scrollToTopMemoryId = pendingScrollMemoryId,
+        onScrollToTopConsumed = { pendingScrollMemoryId = null },
         onConsoleClearanceChanged = { navigator.bottomConsoleClearanceDp = it },
         modifier = modifier,
     )
@@ -219,35 +230,50 @@ fun CaptureRoute(
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun CaptureScreen(
-    memories: List<MemoryItem>,
-    streamingPreviews: Map<String, StreamingPreviewState>,
-    inputText: String,
-    isSubmitting: Boolean,
+    uiState: CaptureUiState,
     onIntent: (CaptureIntent) -> Unit,
     onOpenGraph: (String) -> Unit,
     onOpenRawMemory: (String) -> Unit,
     modifier: Modifier = Modifier,
+    scrollToTopMemoryId: String? = null,
+    onScrollToTopConsumed: () -> Unit = {},
     onConsoleClearanceChanged: (Dp) -> Unit = {},
 ) {
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
+    val listState = rememberLazyListState()
     var isInputFocused by remember { mutableStateOf(false) }
-    var activeDeleteBubbleMemoryId by remember { mutableStateOf<String?>(null) }
     val isImeVisible = WindowInsets.isImeVisible
+    val memories = uiState.memories
+    val latestMemories by rememberUpdatedState(memories)
+
+    LaunchedEffect(scrollToTopMemoryId) {
+        val targetId = scrollToTopMemoryId ?: return@LaunchedEffect
+        val appeared = withTimeoutOrNull(3_000L) {
+            snapshotFlow { latestMemories.firstOrNull()?.id == targetId }.first { it }
+        }
+        if (appeared == true) {
+            listState.animateScrollToItem(0)
+        }
+        onScrollToTopConsumed()
+    }
 
     val dismissKeyboard: () -> Unit = {
         focusManager.clearFocus()
         keyboardController?.hide()
     }
 
+    val inputText = uiState.inputText
     val isInputEmpty = inputText.isEmpty()
-    val lockConsoleExpanded = inputText.isNotBlank() || isSubmitting || isInputFocused
+    val lockConsoleExpanded = inputText.isNotBlank() || uiState.isSubmitting || isInputFocused
     val workspacePadding = LocalWorkspaceContentPadding.current
 
     CollapsibleBottomConsoleLayout(
         lockExpanded = lockConsoleExpanded,
         onUserScroll = {
-            activeDeleteBubbleMemoryId = null
+            if (uiState.activeDeleteBubbleMemoryId != null) {
+                onIntent(CaptureIntent.SetDeleteBubbleMemory(null))
+            }
             if (isInputFocused || isImeVisible) {
                 dismissKeyboard()
             }
@@ -257,12 +283,13 @@ fun CaptureScreen(
         modifier = modifier,
         listContent = { bottomContentPadding ->
             LazyColumn(
+                state = listState,
                 modifier = Modifier
                     .fillMaxSize()
                     .pointerInput(isInputFocused, isImeVisible) {
                         if (isInputFocused || isImeVisible) {
                             detectTapGestures {
-                                activeDeleteBubbleMemoryId = null
+                                onIntent(CaptureIntent.SetDeleteBubbleMemory(null))
                                 dismissKeyboard()
                             }
                         }
@@ -278,23 +305,22 @@ fun CaptureScreen(
                 items(memories, key = { it.id }) { memory ->
                     MemoryTimelineCard(
                         memory = memory,
-                        streamingPreview = streamingPreviews[memory.id],
+                        streamingPreview = uiState.streamingPreviews[memory.id],
                         isKeyboardActive = isInputFocused || isImeVisible,
-                        isDeleteBubbleVisible = activeDeleteBubbleMemoryId == memory.id,
+                        isDeleteBubbleVisible = uiState.activeDeleteBubbleMemoryId == memory.id,
                         onDismissKeyboard = dismissKeyboard,
                         onLongPress = {
                             if (isInputFocused || isImeVisible) {
                                 dismissKeyboard()
                             }
-                            activeDeleteBubbleMemoryId = memory.id
+                            onIntent(CaptureIntent.SetDeleteBubbleMemory(memory.id))
                         },
                         onDismissDeleteBubble = {
-                            if (activeDeleteBubbleMemoryId == memory.id) {
-                                activeDeleteBubbleMemoryId = null
+                            if (uiState.activeDeleteBubbleMemoryId == memory.id) {
+                                onIntent(CaptureIntent.SetDeleteBubbleMemory(null))
                             }
                         },
                         onDeleteMemory = {
-                            activeDeleteBubbleMemoryId = null
                             onIntent(CaptureIntent.DeleteMemory(memory))
                         },
                         onOpenGraph = { onOpenGraph(memory.id) },
@@ -395,7 +421,7 @@ fun CaptureScreen(
                 UnifiedCaptureComposer(
                     inputText = inputText,
                     isInputFocused = isInputFocused,
-                    isSubmitting = isSubmitting,
+                    isSubmitting = uiState.isSubmitting,
                     onFocusChanged = { isInputFocused = it },
                     onValueChange = { onIntent(CaptureIntent.UpdateInput(it)) },
                     onSubmit = {
@@ -768,14 +794,23 @@ private fun MemoryTimelineCard(
 
                         val showTelemetryBadge = shouldShowTelemetryBadge(memory)
                         if (showTelemetryBadge) {
+                            val isFallbackBadge = memory.analysisSource == AnalysisSource.LOCAL_RULE_FALLBACK
                             Surface(
                                 shape = RoundedCornerShape(8.dp),
-                                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f),
+                                color = if (isFallbackBadge) {
+                                    MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.72f)
+                                } else {
+                                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f)
+                                },
                             ) {
                                 Text(
                                     text = memory.telemetryBadge,
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    color = if (isFallbackBadge) {
+                                        MaterialTheme.colorScheme.onSecondaryContainer
+                                    } else {
+                                        MaterialTheme.colorScheme.onPrimaryContainer
+                                    },
                                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
                                 )
                             }
@@ -1075,7 +1110,7 @@ internal fun shouldShowTelemetryBadge(memory: MemoryItem): Boolean {
 
 private const val SAMPLE_RELATION_NOTE =
     "Project sync: Liam Chen sent the latest Micro-OLED reliability report to Priya Nair for review. " +
-        "Marcus Cole says the revised quote is attached to the supply agreement, so Sarah Jenkins and " +
+        "Marcus Cole attached the revised quote to the Supply Agreement, so Sarah Jenkins and " +
         "Elena Vance need to align the delivery penalty clause."
 
 private const val SAMPLE_CALENDAR_NOTE =

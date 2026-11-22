@@ -43,7 +43,6 @@ import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -71,7 +70,6 @@ import io.github.cinpecan.engram.data.repository.CloudSessionState
 import io.github.cinpecan.engram.domain.model.InferenceMode
 import io.github.cinpecan.engram.edgemnn.EngineState
 import io.github.cinpecan.engram.ui.components.ExpressivePillSurface
-import io.github.cinpecan.engram.ui.viewmodel.EngineEffect
 import io.github.cinpecan.engram.ui.viewmodel.EngineIntent
 import io.github.cinpecan.engram.ui.viewmodel.EngineRuntimeStatus
 import io.github.cinpecan.engram.ui.viewmodel.EngineViewModel
@@ -91,15 +89,7 @@ fun EngineBottomSheetRoute(
     val isSyncing by viewModel.isSyncing.collectAsStateWithLifecycle()
     val cloudSessionState by viewModel.cloudSessionState.collectAsStateWithLifecycle()
     val catalogItems by viewModel.catalogItems.collectAsStateWithLifecycle()
-    var latestNotice by remember { mutableStateOf<String?>(null) }
-
-    LaunchedEffect(viewModel) {
-        viewModel.effects.collect { effect ->
-            when (effect) {
-                is EngineEffect.ShowMessage -> latestNotice = effect.message
-            }
-        }
-    }
+    val latestNotice by viewModel.transientNotice.collectAsStateWithLifecycle()
 
     EngineBottomSheetContent(
         inferenceMode = inferenceMode,

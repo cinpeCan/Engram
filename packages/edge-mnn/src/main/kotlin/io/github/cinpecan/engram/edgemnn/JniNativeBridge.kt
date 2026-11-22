@@ -15,6 +15,14 @@ class JniNativeBridge : NativeBridge {
         callback: JniStreamCallbackProxy,
     )
 
+    private external fun nativeGenerateChatStream(
+        handle: Long,
+        systemPrompt: String,
+        userPrompt: String,
+        maxTokens: Int,
+        callback: JniStreamCallbackProxy,
+    )
+
     override fun hasRealMnnBackend(): Boolean = nativeHasRealMnnBackend()
 
     override fun createSession(modelDirPath: String): Long = nativeCreateSession(modelDirPath)
@@ -40,6 +48,22 @@ class JniNativeBridge : NativeBridge {
         nativeGenerateStream(
             handle = sessionHandle,
             prompt = prompt,
+            maxTokens = maxTokens,
+            callback = JniStreamCallbackProxy(callback),
+        )
+    }
+
+    override fun generateChatStream(
+        sessionHandle: Long,
+        systemPrompt: String,
+        userPrompt: String,
+        maxTokens: Int,
+        callback: NativeStreamCallback,
+    ) {
+        nativeGenerateChatStream(
+            handle = sessionHandle,
+            systemPrompt = systemPrompt,
+            userPrompt = userPrompt,
             maxTokens = maxTokens,
             callback = JniStreamCallbackProxy(callback),
         )

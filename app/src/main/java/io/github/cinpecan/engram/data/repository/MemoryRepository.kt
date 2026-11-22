@@ -27,9 +27,13 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -62,6 +66,12 @@ class MemoryRepository(
 
     private val _streamingPreviews = MutableStateFlow<Map<String, StreamingPreviewState>>(emptyMap())
     val streamingPreviews: StateFlow<Map<String, StreamingPreviewState>> = _streamingPreviews.asStateFlow()
+
+    private val _distillationNotices = MutableSharedFlow<String>(
+        extraBufferCapacity = 1,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
+    val distillationNotices: SharedFlow<String> = _distillationNotices.asSharedFlow()
 
     private val syncedCalendarEventsFlow: Flow<Map<String, Long>> by lazy {
         val observer = calendarObserver ?: return@lazy flowOf(emptyMap())
@@ -162,7 +172,10 @@ class MemoryRepository(
         }
     }
 
-    suspend fun captureMemory(rawText: String): MemoryItem? {
+    suspend fun captureMemory(
+        rawText: String,
+        skipCloudAttempt: Boolean = false,
+    ): MemoryItem? {
         val content = rawText.trim()
         if (content.isEmpty()) return null
 
@@ -186,8 +199,23 @@ class MemoryRepository(
             updatedAtMillis = now,
         )
         store.insertRawMemory(initial)
+        launchDistillationJob(
+            id = id,
+            content = content,
+            timestampMillis = now,
+            skipCloudAttempt = skipCloudAttempt,
+        )
+        return initial
+    }
 
-        val job = backgroundScope.launch {
+    private fun launchDistillationJob(
+        id: String,
+        content: String,
+        timestampMillis: Long,
+        skipCloudAttempt: Boolean,
+    ) {
+        lateinit var job: Job
+        job = backgroundScope.launch {
             val prefs = preferencesRepository?.preferencesFlow?.first()
             val mode = prefs?.inferenceMode ?: InferenceMode.OFFLINE_EDGE
             val serverBaseUrl = prefs?.serverBaseUrl.orEmpty()
@@ -199,10 +227,11 @@ class MemoryRepository(
             try {
                 inferenceRouter.distillMemory(
                     content = content,
-                    nowMillis = now,
+                    nowMillis = timestampMillis,
                     mode = mode,
                     serverBaseUrl = serverBaseUrl,
                     authToken = syncKey,
+                    skipCloudAttempt = skipCloudAttempt,
                 ).collect { event ->
                     when (event) {
                         is DistillationEvent.StreamingPreview -> {
@@ -217,10 +246,19 @@ class MemoryRepository(
                                 analysisSource = event.source,
                                 telemetryBadge = event.telemetryBadge,
                             )
-                            val touchedCloudQuota = event.source == AnalysisSource.CLOUD_SSE ||
-                                event.telemetryBadge == UnifiedInferenceRouter.BADGE_FALLBACK_UNAUTHORIZED ||
-                                event.telemetryBadge == UnifiedInferenceRouter.BADGE_FALLBACK_QUOTA ||
+                            val fellBackAtRuntime = !skipCloudAttempt &&
+                                mode == InferenceMode.CLOUD_COLLAB &&
+                                event.source != AnalysisSource.CLOUD_SSE &&
                                 event.telemetryBadge.startsWith(UnifiedInferenceRouter.BADGE_CLOUD_FALLBACK_PREFIX)
+                            if (fellBackAtRuntime) {
+                                _distillationNotices.tryEmit("Cloud unavailable · Fell back to on-device model")
+                            }
+                            val touchedCloudQuota = !skipCloudAttempt && (
+                                event.source == AnalysisSource.CLOUD_SSE ||
+                                    event.telemetryBadge == UnifiedInferenceRouter.BADGE_FALLBACK_UNAUTHORIZED ||
+                                    event.telemetryBadge == UnifiedInferenceRouter.BADGE_FALLBACK_QUOTA ||
+                                    event.telemetryBadge.startsWith(UnifiedInferenceRouter.BADGE_CLOUD_FALLBACK_PREFIX)
+                                )
                             if (touchedCloudQuota) {
                                 cloudSessionMonitor?.retryVerification()
                             }
@@ -229,11 +267,10 @@ class MemoryRepository(
                 }
             } finally {
                 _streamingPreviews.update { it - id }
-                activeDistillationJobs.remove(id)
+                activeDistillationJobs.remove(id, job)
             }
         }
         activeDistillationJobs[id] = job
-        return initial
     }
 
     suspend fun deleteMemory(memoryId: String) {
@@ -259,10 +296,6 @@ class MemoryRepository(
                 }
             }
         }
-    }
-
-    suspend fun restoreMemory(item: MemoryItem) {
-        store.restoreMemory(item)
     }
 
     suspend fun syncWithServer(

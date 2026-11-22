@@ -1,7 +1,6 @@
 package io.github.cinpecan.engram.ui.navigation
 
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -11,17 +10,14 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.unit.dp
 import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.runtime.rememberNavBackStack
-import kotlinx.coroutines.channels.Channel
+import io.github.cinpecan.engram.ui.viewmodel.WorkspaceNoticeAction
+import io.github.cinpecan.engram.ui.viewmodel.WorkspaceNoticeKind
+import io.github.cinpecan.engram.ui.viewmodel.WorkspaceNoticeRequest
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.serialization.Serializable
-
-@Immutable
-data class EngramSnackbarEvent(
-    val message: String,
-    val actionLabel: String? = null,
-    val onAction: (() -> Unit)? = null,
-)
 
 @Serializable
 sealed interface EngramNavKey : NavKey {
@@ -48,27 +44,39 @@ sealed interface EngramNavKey : NavKey {
 class EngramNavigator(
     val backStack: MutableList<NavKey>,
 ) {
-    private val snackbarChannel = Channel<EngramSnackbarEvent>(Channel.BUFFERED)
-    val snackbarEvents: Flow<EngramSnackbarEvent> = snackbarChannel.receiveAsFlow()
+    private val _noticeRequests = MutableSharedFlow<WorkspaceNoticeRequest?>(
+        extraBufferCapacity = 1,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
+    val noticeRequests: Flow<WorkspaceNoticeRequest?> = _noticeRequests.asSharedFlow()
 
     var bottomConsoleClearanceDp by mutableStateOf(0.dp)
 
     fun showMessage(message: String) {
-        snackbarChannel.trySend(EngramSnackbarEvent(message = message))
-    }
-
-    fun showActionMessage(
-        message: String,
-        actionLabel: String,
-        onAction: () -> Unit,
-    ) {
-        snackbarChannel.trySend(
-            EngramSnackbarEvent(
+        _noticeRequests.tryEmit(
+            WorkspaceNoticeRequest(
                 message = message,
-                actionLabel = actionLabel,
-                onAction = onAction,
+                kind = WorkspaceNoticeKind.INFO,
             ),
         )
+    }
+
+    fun showEngineSetupNotice(
+        message: String,
+        actionLabel: String,
+    ) {
+        _noticeRequests.tryEmit(
+            WorkspaceNoticeRequest(
+                message = message,
+                kind = WorkspaceNoticeKind.ENGINE_SETUP,
+                actionLabel = actionLabel,
+                action = WorkspaceNoticeAction.OPEN_ENGINE_SHEET,
+            ),
+        )
+    }
+
+    fun dismissNotice() {
+        _noticeRequests.tryEmit(null)
     }
 
     fun openGraphForMemory(memoryId: String) {

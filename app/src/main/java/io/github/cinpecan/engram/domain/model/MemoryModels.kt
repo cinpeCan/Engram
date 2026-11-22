@@ -6,8 +6,8 @@ import kotlinx.serialization.Serializable
 @Immutable
 @Serializable
 data class CalendarProposal(
-    val title: String,
-    val startTimeIso: String,
+    val title: String = "",
+    val startTimeIso: String = "",
     val durationMinutes: Int = 60,
     val location: String? = null,
 )
@@ -17,17 +17,17 @@ data class CalendarProposal(
 data class RelationTriple(
     val id: String = "",
     val memoryId: String = "",
-    val source: String,
-    val target: String,
-    val relation: String,
+    val source: String = "",
+    val target: String = "",
+    val relation: String = "",
     val bidirectional: Boolean = false,
 )
 
 @Immutable
 @Serializable
 data class MemoryAnalysisPayload(
-    val summary: String,
-    val tags: List<String>,
+    val summary: String = "",
+    val tags: List<String> = emptyList(),
     val calendarProposal: CalendarProposal? = null,
     val relations: List<RelationTriple> = emptyList(),
 )
