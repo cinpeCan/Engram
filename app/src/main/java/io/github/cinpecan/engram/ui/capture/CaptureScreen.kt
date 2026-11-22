@@ -104,6 +104,7 @@ import io.github.cinpecan.engram.ui.components.ExpressivePillSurface
 import io.github.cinpecan.engram.ui.navigation.EngramNavigator
 import io.github.cinpecan.engram.ui.navigation.LocalEngramNavigator
 import io.github.cinpecan.engram.ui.navigation.LocalWorkspaceContentPadding
+import io.github.cinpecan.engram.ui.theme.transparentize
 import io.github.cinpecan.engram.ui.viewmodel.CaptureEffect
 import io.github.cinpecan.engram.ui.viewmodel.CaptureIntent
 import io.github.cinpecan.engram.ui.viewmodel.CaptureViewModel
@@ -1028,7 +1029,7 @@ private fun ScheduleInlineStrip(
                 containerColor = if (calendarSaved) {
                     MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
                 } else {
-                    Color.Transparent
+                    MaterialTheme.colorScheme.primaryContainer.transparentize()
                 },
                 pressedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
                 contentColor = if (calendarSaved) {

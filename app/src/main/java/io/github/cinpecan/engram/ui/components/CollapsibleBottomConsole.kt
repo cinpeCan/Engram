@@ -27,8 +27,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import io.github.cinpecan.engram.ui.theme.transparentize
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -237,7 +237,7 @@ fun CollapsibleBottomConsoleLayout(
                 }
                 .background(
                     Brush.verticalGradient(
-                        0.0f to Color.Transparent,
+                        0.0f to bgColor.transparentize(),
                         0.35f to bgColor.copy(alpha = 0.84f),
                         1.0f to bgColor.copy(alpha = 0.94f),
                     ),

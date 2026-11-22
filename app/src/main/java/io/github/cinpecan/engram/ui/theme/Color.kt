@@ -16,3 +16,10 @@ val LightSurfaceVariant = Color(0xFFE9ECF6)
 val DarkBackground = Color(0xFF0F1117)
 val DarkSurface = Color(0xFF171A23)
 val DarkSurfaceVariant = Color(0xFF232836)
+
+/**
+ * Returns a zero-alpha copy preserving this color's RGB channels so Oklab/sRGB
+ * interpolations (e.g. TopAppBar scroll transitions and gradients) fade alpha cleanly
+ * without dipping through Color.Transparent's black (0, 0, 0) chromaticity.
+ */
+fun Color.transparentize(): Color = copy(alpha = 0f)

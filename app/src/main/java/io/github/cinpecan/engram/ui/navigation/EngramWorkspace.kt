@@ -60,6 +60,7 @@ import io.github.cinpecan.engram.domain.model.InferenceMode
 import io.github.cinpecan.engram.edgemnn.EdgeAiEngine
 import io.github.cinpecan.engram.edgemnn.EngineState
 import io.github.cinpecan.engram.ui.components.ExpressivePillSurface
+import io.github.cinpecan.engram.ui.theme.transparentize
 import org.koin.compose.koinInject
 import org.koin.compose.navigation3.koinEntryProvider
 import org.koin.core.annotation.KoinExperimentalAPI
@@ -127,11 +128,12 @@ fun EngramWorkspace(
                 )
             },
             topBar = {
+                val topBarBaseColor = MaterialTheme.colorScheme.background
                 TopAppBar(
                     title = { Text("Engram") },
                     colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = Color.Transparent,
-                        scrolledContainerColor = MaterialTheme.colorScheme.background.copy(alpha = 0.88f),
+                        containerColor = topBarBaseColor.transparentize(),
+                        scrolledContainerColor = topBarBaseColor.copy(alpha = 0.88f),
                     ),
                     scrollBehavior = topBarScrollBehavior,
                     actions = {

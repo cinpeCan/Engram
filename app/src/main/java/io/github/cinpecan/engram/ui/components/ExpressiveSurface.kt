@@ -28,6 +28,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import io.github.cinpecan.engram.ui.theme.transparentize
 
 /**
  * Material 3 Expressive tactile card surface using spring shape morphing, gentle spatial scale,
@@ -42,7 +43,11 @@ fun ExpressiveCardSurface(
     restCorner: Dp = 20.dp,
     pressedCorner: Dp = 15.dp,
     containerColor: Color = MaterialTheme.colorScheme.surface,
-    pressedContainerColor: Color = lerp(containerColor, MaterialTheme.colorScheme.surfaceVariant, 0.36f),
+    pressedContainerColor: Color = if (containerColor.alpha == 0f) {
+        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.36f)
+    } else {
+        lerp(containerColor, MaterialTheme.colorScheme.surfaceVariant, 0.36f)
+    },
     shadowElevation: Dp = 0.5.dp,
     content: @Composable BoxScope.() -> Unit,
 ) {
@@ -59,8 +64,13 @@ fun ExpressiveCardSurface(
         animationSpec = spring(dampingRatio = 0.72f, stiffness = 700f),
         label = "expressiveCardScale",
     )
+    val restColor = if (containerColor.alpha == 0f && pressedContainerColor.alpha > 0f) {
+        pressedContainerColor.transparentize()
+    } else {
+        containerColor
+    }
     val bgColor by animateColorAsState(
-        targetValue = if (pressed) pressedContainerColor else containerColor,
+        targetValue = if (pressed) pressedContainerColor else restColor,
         animationSpec = spring(dampingRatio = 1.0f, stiffness = 3000f),
         label = "expressiveCardColor",
     )
@@ -98,7 +108,11 @@ fun ExpressivePillSurface(
     restCorner: Dp = 24.dp,
     pressedCorner: Dp = 10.dp,
     containerColor: Color = MaterialTheme.colorScheme.surfaceVariant,
-    pressedContainerColor: Color = lerp(containerColor, MaterialTheme.colorScheme.primaryContainer, 0.42f),
+    pressedContainerColor: Color = if (containerColor.alpha == 0f) {
+        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.42f)
+    } else {
+        lerp(containerColor, MaterialTheme.colorScheme.primaryContainer, 0.42f)
+    },
     contentColor: Color = MaterialTheme.colorScheme.onSurfaceVariant,
     border: BorderStroke? = null,
     shadowElevation: Dp = 0.dp,
@@ -121,8 +135,13 @@ fun ExpressivePillSurface(
         animationSpec = spring(dampingRatio = 0.62f, stiffness = 800f),
         label = "expressivePillScale",
     )
+    val restColor = if (containerColor.alpha == 0f && pressedContainerColor.alpha > 0f) {
+        pressedContainerColor.transparentize()
+    } else {
+        containerColor
+    }
     val bgColor by animateColorAsState(
-        targetValue = if (effectivePressed) pressedContainerColor else containerColor,
+        targetValue = if (effectivePressed) pressedContainerColor else restColor,
         animationSpec = spring(dampingRatio = 1.0f, stiffness = 3800f),
         label = "expressivePillColor",
     )
