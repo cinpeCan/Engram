@@ -9,6 +9,16 @@
 
 > Measured on Samsung Galaxy F52 5G (Snapdragon 750G): on-device MNN Qwen2.5-0.5B INT4 reaches **TTFT ≈ 1.6 s · 14–20 tok/s · +290 MB RSS**; cloud Gemini Flash-Lite streams at **TTFT < 1 s**. See the [benchmark matrix](docs/benchmark.md#3-real-device-mnn-llm-benchmark-matrix).
 
+<p align="center">
+  <img src="docs/assets/01-timeline-capture.jpg" width="24%" alt="Capture timeline with on-device MNN distillation and calendar proposal" />
+  <img src="docs/assets/02-relationship-graph.jpg" width="24%" alt="Single-memory 2D force-directed relationship graph" />
+  <img src="docs/assets/03-graphrag-answer.jpg" width="24%" alt="Cited GraphRAG answer with unfolded reasoning graph" />
+  <img src="docs/assets/04-engine-sync.png" width="24%" alt="On-device MNN memory footprint and cloud sync settings" />
+</p>
+<p align="center">
+  <sub><b>1.</b> Capture timeline &amp; MNN telemetry &nbsp;·&nbsp; <b>2.</b> Deponder 2D relationship graph &nbsp;·&nbsp; <b>3.</b> Cited GraphRAG &amp; unfolded reasoning graph &nbsp;·&nbsp; <b>4.</b> On-device RSS &amp; cloud sync</sub>
+</p>
+
 ---
 
 ## Highlights
@@ -87,26 +97,32 @@ engram/
 
 ## Quick Start
 
-### 1. Build the MNN native libraries (for real on-device inference)
+### 1. Install the prebuilt APK (fastest)
+
+Download the signed `arm64-v8a` APK from **[GitHub Releases](https://github.com/cinpeCan/Engram/releases/latest)** (`libMNN.so` and `libllm.so` are prebundled; Android 10+):
+- Open the app to explore the sample memories and 2D relationship graphs right away.
+- Tap the top-right engine chip (`Inference & Sync`) to download **`Qwen2.5-0.5B-Instruct-MNN`** inside the app for offline distillation and GraphRAG, or enter an access token to stream via the cloud gateway.
+
+### 2. Build from source
 
 ```bash
-# alibaba/MNN arm64-v8a shared libraries with NDK 28 & 16 KB page-size alignment
+# Optional: build alibaba/MNN arm64-v8a shared libraries (NDK 28, 16 KB page alignment)
 ./scripts/build_mnn_android.sh
 ```
 
-Then run the tests and build. `:packages:edge-mnn` compiles with `ENGRAM_HAS_MNN_LIB=1` once `jniLibs/arm64-v8a/` is populated, or with `ENGRAM_HAS_MNN_LIB=0` out of the box:
+Then run the unit tests and assemble the debug APK (`:packages:edge-mnn` compiles with `ENGRAM_HAS_MNN_LIB=1` once `jniLibs/arm64-v8a/` is populated, or with `ENGRAM_HAS_MNN_LIB=0` out of the box):
 
 ```bash
 ./gradlew testDebugUnitTest assembleDebug
 ```
 
-Download `Qwen2.5-0.5B-Instruct-MNN` inside the app (ModelScope with HuggingFace fallback), or push it over ADB:
+You can also push `Qwen2.5-0.5B-Instruct-MNN` weights over ADB:
 
 ```bash
 python3 scripts/fetch_models.py --adb-push
 ```
 
-### 2. Run the gateway
+### 3. Run the gateway locally
 
 ```bash
 # http://0.0.0.0:8787 (USB debugging: adb reverse tcp:8787 tcp:8787)

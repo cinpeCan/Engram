@@ -9,6 +9,16 @@
 
 > 真机实测（Samsung Galaxy F52 5G / Snapdragon 750G）：端侧 MNN Qwen2.5-0.5B INT4 **首字约 1.6 s、14–20 tok/s、内存增量 +290 MB**；云端 Gemini Flash-Lite **首字 < 1 s**。详见[基准测试](docs/benchmark.md#3-real-device-mnn-llm-benchmark-matrix)。
 
+<p align="center">
+  <img src="docs/assets/01-timeline-capture.jpg" width="24%" alt="主时间线、端侧 MNN 遥测与日程确认卡" />
+  <img src="docs/assets/02-relationship-graph.jpg" width="24%" alt="单条记忆 2D 力导向关系图谱" />
+  <img src="docs/assets/03-graphrag-answer.jpg" width="24%" alt="带引用的 GraphRAG 跨记忆回答与拓扑解结推理图" />
+  <img src="docs/assets/04-engine-sync.png" width="24%" alt="端侧 MNN 内存占用与多端同步面板" />
+</p>
+<p align="center">
+  <sub><b>1.</b> 主时间线与端侧遥测 &nbsp;·&nbsp; <b>2.</b> Deponder 2D 关系图谱 &nbsp;·&nbsp; <b>3.</b> GraphRAG 引用回答与解结推理图 &nbsp;·&nbsp; <b>4.</b> 端侧内存与云同步面板</sub>
+</p>
+
 ---
 
 ## 亮点
@@ -87,26 +97,32 @@ engram/
 
 ## 快速开始
 
-### 1. 编译 MNN 原生库（真机端侧推理需要）
+### 1. 直接安装预编译 APK（最快）
+
+前往 **[GitHub Releases](https://github.com/cinpeCan/Engram/releases/latest)** 下载已签名的 `arm64-v8a` 安装包（已内置 `libMNN.so` 与 `libllm.so`，支持 Android 10+）：
+- 安装打开即可直接浏览示例记忆与 2D 关系图谱。
+- 点击右上角状态胶囊打开 `Inference & Sync` 面板，可在应用内一键下载 **`Qwen2.5-0.5B-Instruct-MNN`** 离线运行提炼与问答，或填入访问令牌连接云端网关。
+
+### 2. 从源码构建
 
 ```bash
-# 用 NDK 28 编译 alibaba/MNN arm64-v8a 动态库，16 KB 页对齐
+# 可选：用 NDK 28 编译 alibaba/MNN arm64-v8a 动态库（16 KB 页对齐）
 ./scripts/build_mnn_android.sh
 ```
 
-然后运行测试并构建。`jniLibs/arm64-v8a/` 有原生库时，`:packages:edge-mnn` 以 `ENGRAM_HAS_MNN_LIB=1` 编译；没有时以 `ENGRAM_HAS_MNN_LIB=0` 直接编译通过：
+运行单测并构建调试包（`jniLibs/arm64-v8a/` 有原生库时以 `ENGRAM_HAS_MNN_LIB=1` 编译；没有时以 `ENGRAM_HAS_MNN_LIB=0` 直接编译通过）：
 
 ```bash
 ./gradlew testDebugUnitTest assembleDebug
 ```
 
-模型 `Qwen2.5-0.5B-Instruct-MNN` 可以在 App 内下载（魔搭优先，HuggingFace 备用），也可以通过 ADB 推送：
+模型权重也可通过脚本经 ADB 推送至真机：
 
 ```bash
 python3 scripts/fetch_models.py --adb-push
 ```
 
-### 2. 启动网关
+### 3. 本地启动网关
 
 ```bash
 # 监听 http://0.0.0.0:8787（USB 真机调试：adb reverse tcp:8787 tcp:8787）
