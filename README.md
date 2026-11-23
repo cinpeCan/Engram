@@ -97,20 +97,20 @@ engram/
 
 ## Quick Start
 
-### 1. Install the prebuilt APK (fastest)
+### Option A — Install the prebuilt APK (fastest)
 
 Download the signed `arm64-v8a` APK from **[GitHub Releases](https://github.com/cinpeCan/Engram/releases/latest)** (`libMNN.so` and `libllm.so` are prebundled; Android 10+):
 - Open the app to explore the sample memories and 2D relationship graphs right away.
 - Tap the top-right engine chip (`Inference & Sync`) to download **`Qwen2.5-0.5B-Instruct-MNN`** inside the app for offline distillation and GraphRAG, or enter an access token to stream via the cloud gateway.
 
-### 2. Build from source
+### Option B — Or build the app from source
 
 ```bash
 # Optional: build alibaba/MNN arm64-v8a shared libraries (NDK 28, 16 KB page alignment)
 ./scripts/build_mnn_android.sh
 ```
 
-Then run the unit tests and assemble the debug APK (`:packages:edge-mnn` compiles with `ENGRAM_HAS_MNN_LIB=1` once `jniLibs/arm64-v8a/` is populated, or with `ENGRAM_HAS_MNN_LIB=0` out of the box):
+Run the unit tests and assemble the debug APK (`:packages:edge-mnn` compiles with `ENGRAM_HAS_MNN_LIB=1` once `jniLibs/arm64-v8a/` is populated, or with `ENGRAM_HAS_MNN_LIB=0` out of the box):
 
 ```bash
 ./gradlew testDebugUnitTest assembleDebug
@@ -122,7 +122,9 @@ You can also push `Qwen2.5-0.5B-Instruct-MNN` weights over ADB:
 python3 scripts/fetch_models.py --adb-push
 ```
 
-### 3. Run the gateway locally
+### Optional — Self-host the gateway locally
+
+Only needed if you want to run your own cloud SSE / sync server instead of offline MNN or the hosted evaluation gateway:
 
 ```bash
 # http://0.0.0.0:8787 (USB debugging: adb reverse tcp:8787 tcp:8787)

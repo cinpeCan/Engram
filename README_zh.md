@@ -97,13 +97,13 @@ engram/
 
 ## 快速开始
 
-### 1. 直接安装预编译 APK（最快）
+### 方式 A：直接安装预编译 APK（最快）
 
 前往 **[GitHub Releases](https://github.com/cinpeCan/Engram/releases/latest)** 下载已签名的 `arm64-v8a` 安装包（已内置 `libMNN.so` 与 `libllm.so`，支持 Android 10+）：
 - 安装打开即可直接浏览示例记忆与 2D 关系图谱。
 - 点击右上角状态胶囊打开 `Inference & Sync` 面板，可在应用内一键下载 **`Qwen2.5-0.5B-Instruct-MNN`** 离线运行提炼与问答，或填入访问令牌连接云端网关。
 
-### 2. 从源码构建
+### 方式 B：或从源码构建客户端
 
 ```bash
 # 可选：用 NDK 28 编译 alibaba/MNN arm64-v8a 动态库（16 KB 页对齐）
@@ -122,7 +122,9 @@ engram/
 python3 scripts/fetch_models.py --adb-push
 ```
 
-### 3. 本地启动网关
+### 可选：在本地自建云端网关
+
+端侧离线推理或使用评估网关时无需启动；仅在需要自建云端 SSE 与同步服务时运行：
 
 ```bash
 # 监听 http://0.0.0.0:8787（USB 真机调试：adb reverse tcp:8787 tcp:8787）
